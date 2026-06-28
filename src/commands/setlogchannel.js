@@ -1,7 +1,6 @@
 // src/commands/setlogchannel.js
 // Slash command: /setlogchannel #canal
-// Guarda el canal elegido en Supabase para que los embeds se envíen ahí.
-// Solo usuarios autorizados.
+// Visible para todos, solo funciona para IDs autorizadas.
 
 import { SlashCommandBuilder, PermissionFlagsBits, ChannelType } from 'discord.js';
 import { isAuthorized } from '../utils/isAuthorized.js';
@@ -17,8 +16,7 @@ export const data = new SlashCommandBuilder()
       .setDescription('Canal de texto donde se publicarán los nuevos logs')
       .addChannelTypes(ChannelType.GuildText)
       .setRequired(true)
-  )
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
+  );
 
 export async function execute(interaction) {
   if (!isAuthorized(interaction.user.id)) {
@@ -33,7 +31,6 @@ export async function execute(interaction) {
 
   const channel = interaction.options.getChannel('canal');
 
-  // Verificar que el bot puede escribir en ese canal
   const perms = channel.permissionsFor(interaction.guild.members.me);
   if (!perms.has(PermissionFlagsBits.SendMessages)) {
     await interaction.editReply({
