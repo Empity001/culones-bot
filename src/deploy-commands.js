@@ -33,7 +33,7 @@ try {
   console.log(`[Deploy] Registrando ${commands.length} comando(s) en el guild ${config.discord.guildId}...`);
 
   const data = await rest.put(
-    Routes.applicationCommands(config.discord.clientId),
+    Routes.applicationGuildCommands(config.discord.clientId, config.discord.guildId),,
     { body: commands }
   );
 
