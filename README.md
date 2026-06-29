@@ -23,13 +23,40 @@ El bot está suscrito en tiempo real a la tabla de logs de Supabase — no consu
 
 ### 🖼️ `/screenshot` — capturar una sección de la web como imagen
 
-Comando con tres subcomandos, todos restringidos a los IDs autorizados (incluido el autocompletado: alguien sin permiso no puede ni ver sugerencias de nombres de armas).
+Cualquier miembro del servidor puede usar los subcomandos de screenshot. La opción `canal` (redirigir la imagen a otro canal) es la única parte restringida a los IDs autorizados — si alguien sin permiso la usa, se ignora silenciosamente y la imagen va al canal donde está.
 
-- **`/screenshot tierlist columna:<Arma|Sub-arma|Accesorio> [canal]`** — genera una imagen de esa columna completa de la tierlist: cada fila (tier) con su color y nombre, y los personajes/elementos que contiene con su miniatura en pixel-art nítido.
-- **`/screenshot logs [cantidad] [canal]`** — genera una imagen tipo lista con los logs más recientes (por defecto 10, máximo 20): título, categoría, relevancia y fecha de cada uno, ordenados del más nuevo al más viejo.
-- **`/screenshot arma nombre:<autocompletado> [canal]`** — mientras se escribe el nombre, Discord sugiere armas que coincidan (busca en las armas publicadas de la Guía de Armas). Al confirmar, el bot genera **una imagen separada por cada rango** que tenga esa arma (MK1, MK2...), incluyendo en cada una: descripción del rango, estadísticas, habilidades con su barra de nivel, y la receta de mejora (materiales → resultado) si la tiene. Todas las imágenes del arma se mandan juntas en el mismo mensaje.
+#### `/screenshot tierlist`
 
-En los tres casos, si no se especifica `canal`, la imagen se envía al canal donde se ejecutó el comando. El bot comprueba que tiene permiso para adjuntar archivos en el canal destino antes de generar nada.
+Genera una imagen de la tierlist.
+
+- **`columna: Arma / Sub-arma / Accesorio`** — captura esa columna individual: cada fila (tier) con su color y nombre, y los elementos con su miniatura en pixel-art nítido.
+- **`columna: Todas juntas`** — genera una sola imagen ancha (1260px) con las 3 columnas side-by-side en un mismo render.
+- Opción `canal` (solo admins): envía la imagen a otro canal en vez del actual.
+
+#### `/screenshot armas`
+
+Catálogo visual de todas las armas publicadas — nombre e imagen de cada una, sin specs ni rangos. Agrupa las armas por categoría con su color.
+
+- Sin filtros: muestra todas las armas publicadas.
+- **`filtro: Categoría`** + **`valor: <autocomplete>`** — muestra solo las armas de esa categoría.
+- **`filtro: Tipo`** + **`valor: <autocomplete>`** — muestra solo las armas de ese tipo.
+- Opción `canal` (solo admins): envía la imagen a otro canal.
+
+#### `/screenshot arma`
+
+Ficha completa de un arma específica, una imagen por rango.
+
+- **`nombre: <autocomplete>`** — busca entre las armas publicadas mientras escribís. Al confirmar, genera una imagen por cada rango (MK1, MK2...) con descripción, estadísticas, habilidades con barra de nivel y receta de mejora. Todas se mandan juntas en el mismo mensaje.
+- Opción `canal` (solo admins): envía las imágenes a otro canal.
+
+#### `/screenshot logs`
+
+Lista o detalle de logs.
+
+- Sin opciones: genera una imagen con los 10 logs más recientes (título, categoría, relevancia, fecha).
+- **`cantidad`**: cuántos logs mostrar (máximo 20).
+- **`ver: <autocomplete del título>`** — en vez de la lista, genera una imagen con el contenido completo de ese log: título, descripción, mobs con sus stats (vida/daño/armor, equipamiento, ubicación) e items (rango, tipo, dónde se obtiene).
+- Opción `canal` (solo admins): envía la imagen a otro canal.
 
 ### 🏓 `/ping` — diagnóstico
 
@@ -39,12 +66,13 @@ Visible para cualquiera. Responde con la latencia del bot hacia Discord (WebSock
 
 ## 🔒 Quién puede usar qué
 
-| Comando | Quién puede usarlo |
+| Comando / Opción | Quién puede usarlo |
 |---|---|
 | `/ping` | Cualquiera |
+| `/screenshot` (generar imagen) | Cualquiera |
+| `/screenshot` opción `canal` | Solo IDs en `AUTHORIZED_USER_IDS` |
 | `/getcode` | Solo IDs en `AUTHORIZED_USER_IDS` |
 | `/setlogchannel` | Solo IDs en `AUTHORIZED_USER_IDS` |
-| `/screenshot` (los 3 subcomandos) | Solo IDs en `AUTHORIZED_USER_IDS` |
 
 La autorización es siempre por **ID de usuario de Discord**, no por rol del servidor — es la misma lista para todo el bot, definida en la variable de entorno `AUTHORIZED_USER_IDS` (uno o varios IDs separados por coma).
 
@@ -62,7 +90,7 @@ src/
 │   ├── ping.js           → Diagnóstico de latencia
 │   ├── getcode.js        → Envía el código admin por DM (solo autorizados)
 │   ├── setlogchannel.js  → Configura el canal donde se anuncian logs
-│   └── screenshot.js     → Captura tierlist / logs / arma como imagen (solo autorizados)
+│   └── screenshot.js     → Captura tierlist / armas / arma / logs como imagen
 │
 ├── events/               → Un archivo = un evento de Discord
 │   ├── ready.js          → Genera el primer código, arranca el cron de 24h y el watcher
@@ -74,15 +102,19 @@ src/
 │   ├── botConfig.js      → Configuración persistente en Supabase (ej. canal de logs)
 │   ├── logWatcher.js     → Suscripción Realtime: publica/edita embeds de logs
 │   ├── tierlist.js       → Carga filas/items de la tierlist
-│   ├── weapons.js        → Busca armas (autocompletado) y carga ficha + rangos
-│   └── logs.js           → Carga los logs más recientes con su categoría
+│   ├── weapons.js        → Busca armas (autocomplete), carga ficha+rangos y catálogo
+│   └── logs.js           → Carga logs recientes o un log específico por ID
 │
 └── utils/
-    ├── embeds.js          → Builders de embeds de Discord
-    ├── isAuthorized.js    → Comprueba si un usuario está en la lista autorizada
-    ├── renderTierlist.js  → Dibuja la imagen de una columna de la tierlist
-    ├── renderWeapon.js    → Dibuja la imagen de un rango de arma (stats/habilidades/receta)
-    └── renderLogs.js      → Dibuja la imagen con la lista de logs recientes
+    ├── embeds.js              → Builders de embeds de Discord
+    ├── isAuthorized.js        → Comprueba si un usuario está en la lista autorizada
+    ├── fonts.js               → Registra las fuentes bundleadas para canvas
+    ├── renderTierlist.js      → Dibuja la imagen de una columna de la tierlist
+    ├── renderTierlistFull.js  → Dibuja las 3 columnas juntas en una sola imagen
+    ├── renderWeapon.js        → Dibuja la ficha de un rango de arma (stats/habilidades/receta)
+    ├── renderWeaponCatalog.js → Dibuja el catálogo de armas (grilla nombre+imagen por categoría)
+    ├── renderLogs.js          → Dibuja la lista de logs recientes
+    └── renderLogDetail.js     → Dibuja el contenido completo de un log (mobs, items, descripción)
 
 sql/
 └── bot_tables.sql        → Tablas que este bot necesita en Supabase (admin_codes, bot_config)
@@ -103,7 +135,7 @@ sql/
    ```
 6. **Ejecutar**: `npm run dev` en local (se reinicia solo al cambiar archivos), o sube el repo a [Railway](https://railway.app) → New Project → Deploy from GitHub → agrega las mismas variables de entorno en **Variables**. Railway detecta `"start": "node src/index.js"` y despliega automáticamente; cada push a GitHub redespliega solo.
 
-> 📌 Si ya tenías el bot desplegado con el comando antiguo `/sendtierlist`, fue reemplazado por `/screenshot tierlist`. Al correr `npm run deploy` de nuevo, Discord sobrescribe el set completo de comandos con los que existan en `src/commands/` — `/sendtierlist` deja de aparecer automáticamente.
+> 📌 `npm run deploy` sobreescribe el set completo de comandos en Discord con lo que exista en `src/commands/` en ese momento — no acumula comandos viejos.
 
 ### Agregar un comando o evento nuevo
 
