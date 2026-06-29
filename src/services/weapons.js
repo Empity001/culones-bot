@@ -61,3 +61,43 @@ export async function loadWeaponWithRanks(weaponId) {
 
   return { weapon, category, type, ranks: ranksRes.data || [] };
 }
+
+/**
+ * Carga todas las armas publicadas junto con su categoría y tipo.
+ * Opcionalmente filtra por category_id o type_id.
+ * @param {{ categoryId?: string, typeId?: string }} filters
+ */
+export async function loadWeaponCatalog({ categoryId, typeId } = {}) {
+  let req = supabase
+    .from('weapons')
+    .select('*')
+    .eq('published', true)
+    .order('sort_order', { ascending: true });
+
+  if (categoryId) req = req.eq('category_id', categoryId);
+  if (typeId)     req = req.eq('type_id', typeId);
+
+  const [weaponsRes, catsRes, typesRes] = await Promise.all([
+    req,
+    supabase.from('weapon_categories').select('*').order('sort_order', { ascending: true }),
+    supabase.from('weapon_types').select('*').order('sort_order', { ascending: true }),
+  ]);
+
+  if (weaponsRes.error) throw new Error(`[Weapons] Error catálogo: ${weaponsRes.error.message}`);
+
+  const catsById  = new Map((catsRes.data  || []).map(c => [c.id, c]));
+  const typesById = new Map((typesRes.data || []).map(t => [t.id, t]));
+
+  const weapons = (weaponsRes.data || []).map(w => ({
+    ...w,
+    categoryLabel: w.category_id ? (catsById.get(w.category_id)?.label || null) : null,
+    categoryColor: w.category_id ? (catsById.get(w.category_id)?.color || null) : null,
+    typeLabel:     w.type_id     ? (typesById.get(w.type_id)?.label  || null) : null,
+  }));
+
+  return {
+    weapons,
+    categories: catsRes.data  || [],
+    types:      typesRes.data || [],
+  };
+}

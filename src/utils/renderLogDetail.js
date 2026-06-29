@@ -1,0 +1,365 @@
+// src/utils/renderLogDetail.js
+// Genera una imagen PNG con el contenido completo de un log:
+// título, descripción, categoría, relevancia, mobs e items.
+
+import { createCanvas } from '@napi-rs/canvas';
+import { ensureFonts, FONT } from './fonts.js';
+
+// ── Tokens de diseño (mismo sistema que los otros renderers) ─────────────────
+const BG_COLOR    = '#0c0a14';
+const BORDER_COLOR = 'rgba(255,255,255,0.08)';
+const GOLD        = '#f3b73a';
+const CYAN        = '#4dd4e8';
+const MAGENTA     = '#ff3d8e';
+const GREEN       = '#38e07a';
+const INK_100     = '#f4f1fb';
+const INK_400     = '#9a92b8';
+const INK_600     = 'rgba(255,255,255,0.35)';
+
+const CANVAS_W = 680;
+const PADDING  = 20;
+
+const RELEVANCE_COLOR = {
+  low:      '#9a92b8',
+  normal:   CYAN,
+  high:     GOLD,
+  critical: MAGENTA,
+};
+const RELEVANCE_LABEL = {
+  low:      'Baja',
+  normal:   'Normal',
+  high:     'Alta',
+  critical: 'Crítica',
+};
+
+function truncate(str, max) {
+  if (!str) return '';
+  return str.length > max ? str.slice(0, max - 1) + '…' : str;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function wrapText(ctx, text, maxWidth) {
+  if (!text) return [];
+  const words = text.split(/\s+/);
+  const lines = [];
+  let current = '';
+  for (const word of words) {
+    const test = current ? `${current} ${word}` : word;
+    if (ctx.measureText(test).width > maxWidth && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = test;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+function sectionHeader(ctx, label, color, x, y, w) {
+  ctx.fillStyle = color;
+  ctx.font = `bold 12px ${FONT.sans}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, x, y + 9);
+  ctx.strokeStyle = `${color}44`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const textW = ctx.measureText(label).width;
+  ctx.moveTo(x + textW + 8, y + 9);
+  ctx.lineTo(x + w, y + 9);
+  ctx.stroke();
+  return y + 24;
+}
+
+/**
+ * Genera el PNG con el contenido completo de un log.
+ * @param {Object} log - salida de loadLogById()
+ * @param {string} serverName
+ * @returns {Buffer}
+ */
+export function renderLogDetailImage(log, serverName = 'Culones RPG') {
+  ensureFonts();
+
+  const contentW = CANVAS_W - PADDING * 2;
+  const relColor = RELEVANCE_COLOR[log.relevance] || CYAN;
+  const cat      = log.categoryInfo;
+
+  // ── Pre-calcular altura total ────────────────────────────────────────────
+  // Usamos un canvas temporal solo para medir texto
+  const measure = createCanvas(CANVAS_W, 10).getContext('2d');
+  ensureFonts();
+
+  let estimatedH = 56; // header
+  estimatedH += PADDING;
+
+  // Título (puede tener 2 líneas)
+  measure.font = `bold 18px ${FONT.sans}`;
+  const titleLines = wrapText(measure, log.title || '', contentW - 8);
+  estimatedH += titleLines.length * 24 + 8;
+
+  // Meta: fecha + categoría + relevancia
+  estimatedH += 22 + PADDING;
+
+  // Descripción
+  if (log.description) {
+    measure.font = `13px ${FONT.sans}`;
+    estimatedH += 24; // sección header
+    estimatedH += wrapText(measure, log.description, contentW - 4).length * 18 + 12;
+  }
+
+  // Mobs
+  const mobs = log.mobs || [];
+  if (mobs.length > 0) {
+    estimatedH += 24; // sección header
+    estimatedH += mobs.length * 72 + (mobs.length - 1) * 8;
+    estimatedH += 12;
+  }
+
+  // Items
+  const items = log.items || [];
+  if (items.length > 0) {
+    estimatedH += 24;
+    estimatedH += items.length * 52 + (items.length - 1) * 6;
+    estimatedH += 12;
+  }
+
+  estimatedH += PADDING + 30; // footer
+
+  // ── Canvas real ───────────────────────────────────────────────────────────
+  const canvas = createCanvas(CANVAS_W, Math.max(estimatedH, 200));
+  const ctx    = canvas.getContext('2d');
+
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, CANVAS_W, canvas.height);
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  const HEADER_H = 56;
+  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fillRect(0, 0, CANVAS_W, HEADER_H);
+  ctx.strokeStyle = `${GOLD}66`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, HEADER_H);
+  ctx.lineTo(CANVAS_W, HEADER_H);
+  ctx.stroke();
+
+  ctx.fillStyle    = GOLD;
+  ctx.font         = `bold 17px ${FONT.sans}`;
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('📜 DETALLE DE LOG', PADDING, HEADER_H / 2);
+
+  // Fecha en el header
+  const dateStr = new Date(log.created_at).toLocaleDateString('es-ES', {
+    day: '2-digit', month: 'short', year: 'numeric',
+  });
+  ctx.fillStyle = INK_600;
+  ctx.font      = `11px ${FONT.sans}`;
+  ctx.textAlign = 'right';
+  ctx.fillText(dateStr, CANVAS_W - PADDING, HEADER_H / 2);
+
+  // ── Cuerpo ────────────────────────────────────────────────────────────────
+  let y = HEADER_H + PADDING;
+
+  // Barra lateral de relevancia + Título
+  ctx.fillStyle = relColor;
+  ctx.fillRect(PADDING, y, 4, titleLines.length * 24 + 4);
+
+  ctx.fillStyle    = INK_100;
+  ctx.font         = `bold 18px ${FONT.sans}`;
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'top';
+  for (let i = 0; i < titleLines.length; i++) {
+    ctx.fillText(titleLines[i], PADDING + 14, y + i * 24);
+  }
+  y += titleLines.length * 24 + 8;
+
+  // Meta row: categoría + relevancia + likes
+  ctx.font = `11px ${FONT.sans}`;
+  ctx.textBaseline = 'middle';
+  let metaX = PADDING + 14;
+
+  if (cat) {
+    const catLabel = `${cat.emoji || ''} ${cat.label}`;
+    ctx.fillStyle = cat.color || INK_400;
+    ctx.fillText(catLabel, metaX, y + 8);
+    metaX += ctx.measureText(catLabel).width + 14;
+  }
+
+  ctx.fillStyle = relColor;
+  ctx.fillText(`⚡ ${RELEVANCE_LABEL[log.relevance] || log.relevance || '—'}`, metaX, y + 8);
+  metaX += ctx.measureText(`⚡ ${RELEVANCE_LABEL[log.relevance] || ''}  `).width + 14;
+
+  ctx.fillStyle = MAGENTA;
+  ctx.fillText(`❤ ${log.likes ?? 0}`, metaX, y + 8);
+
+  y += 22 + PADDING;
+
+  // Separador
+  ctx.strokeStyle = BORDER_COLOR;
+  ctx.lineWidth   = 1;
+  ctx.beginPath();
+  ctx.moveTo(PADDING, y);
+  ctx.lineTo(CANVAS_W - PADDING, y);
+  ctx.stroke();
+  y += 14;
+
+  // ── Descripción ───────────────────────────────────────────────────────────
+  if (log.description) {
+    y = sectionHeader(ctx, 'DESCRIPCIÓN', CYAN, PADDING, y, contentW);
+
+    ctx.font         = `13px ${FONT.sans}`;
+    ctx.fillStyle    = 'rgba(255,255,255,0.78)';
+    ctx.textBaseline = 'top';
+    ctx.textAlign    = 'left';
+    const descLines = wrapText(ctx, log.description, contentW - 4);
+    for (const line of descLines) {
+      ctx.fillText(line, PADDING, y);
+      y += 18;
+    }
+    y += 12;
+  }
+
+  // ── Mobs ──────────────────────────────────────────────────────────────────
+  if (mobs.length > 0) {
+    y = sectionHeader(ctx, `MOBS (${mobs.length})`, MAGENTA, PADDING, y, contentW);
+
+    for (const mob of mobs) {
+      const cardH = 68;
+
+      ctx.fillStyle = 'rgba(255,61,142,0.06)';
+      roundRect(ctx, PADDING, y, contentW, cardH, 8);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,61,142,0.18)';
+      ctx.lineWidth = 1;
+      roundRect(ctx, PADDING, y, contentW, cardH, 8);
+      ctx.stroke();
+
+      // Nombre
+      ctx.fillStyle    = INK_100;
+      ctx.font         = `bold 13px ${FONT.sans}`;
+      ctx.textAlign    = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(truncate(mob.name, 34), PADDING + 12, y + 10);
+
+      // Stats en fila
+      const stats = [];
+      if (mob.health != null) stats.push({ label: '❤ Vida',   value: mob.health, color: MAGENTA });
+      if (mob.damage != null) stats.push({ label: '⚔ Daño',   value: mob.damage, color: GOLD });
+      if (mob.armor  != null) stats.push({ label: '🛡 Armor',  value: mob.armor,  color: CYAN });
+
+      let sx = PADDING + 12;
+      const sy = y + 30;
+      ctx.font = `11px ${FONT.sans}`;
+      for (const st of stats) {
+        ctx.fillStyle = INK_400;
+        ctx.fillText(`${st.label}: `, sx, sy);
+        const labelW = ctx.measureText(`${st.label}: `).width;
+        ctx.fillStyle = st.color;
+        ctx.font = `bold 11px ${FONT.sans}`;
+        ctx.fillText(String(st.value), sx + labelW, sy);
+        sx += labelW + ctx.measureText(String(st.value)).width + 16;
+        ctx.font = `11px ${FONT.sans}`;
+      }
+
+      // Equipamiento / ubicación
+      const metaParts = [];
+      if (mob.equipment) metaParts.push(`🎒 ${mob.equipment}`);
+      if (mob.location)  metaParts.push(`📍 ${mob.location}`);
+      if (metaParts.length) {
+        ctx.fillStyle    = INK_400;
+        ctx.font         = `10px ${FONT.sans}`;
+        ctx.textBaseline = 'top';
+        ctx.fillText(truncate(metaParts.join('  ·  '), 72), PADDING + 12, y + 48);
+      }
+
+      y += cardH + 8;
+    }
+    y += 4;
+  }
+
+  // ── Items ─────────────────────────────────────────────────────────────────
+  if (items.length > 0) {
+    y = sectionHeader(ctx, `ITEMS (${items.length})`, GREEN, PADDING, y, contentW);
+
+    for (const item of items) {
+      const cardH = 48;
+
+      ctx.fillStyle = 'rgba(56,224,122,0.05)';
+      roundRect(ctx, PADDING, y, contentW, cardH, 8);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(56,224,122,0.15)';
+      ctx.lineWidth = 1;
+      roundRect(ctx, PADDING, y, contentW, cardH, 8);
+      ctx.stroke();
+
+      // Nombre
+      ctx.fillStyle    = INK_100;
+      ctx.font         = `bold 13px ${FONT.sans}`;
+      ctx.textAlign    = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(truncate(item.name, 34), PADDING + 12, y + 8);
+
+      // Meta: tier · tipo · origen
+      const metaParts = [];
+      if (item.tier)          metaParts.push(`Rango: ${item.tier}`);
+      if (item.item_type)     metaParts.push(`${item.item_type}`);
+      if (item.obtained_from) metaParts.push(`📍 ${item.obtained_from}`);
+
+      if (metaParts.length) {
+        ctx.fillStyle    = INK_400;
+        ctx.font         = `10.5px ${FONT.sans}`;
+        ctx.textBaseline = 'top';
+        ctx.fillText(truncate(metaParts.join('  ·  '), 76), PADDING + 12, y + 28);
+      }
+
+      y += cardH + 6;
+    }
+    y += 4;
+  }
+
+  // ── Vacío ─────────────────────────────────────────────────────────────────
+  if (!log.description && mobs.length === 0 && items.length === 0) {
+    ctx.fillStyle    = INK_600;
+    ctx.font         = `13px ${FONT.sans}`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Este log no tiene contenido detallado.', CANVAS_W / 2, y + 24);
+    y += 48;
+  }
+
+  // ── Footer ────────────────────────────────────────────────────────────────
+  const footerY = canvas.height - 30;
+  ctx.strokeStyle = BORDER_COLOR;
+  ctx.lineWidth   = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, footerY);
+  ctx.lineTo(CANVAS_W, footerY);
+  ctx.stroke();
+
+  ctx.fillStyle    = INK_600;
+  ctx.font         = `10px ${FONT.sans}`;
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`${serverName} · ${new Date().toLocaleDateString('es-ES')}`, PADDING, footerY + 15);
+
+  ctx.fillStyle = CYAN;
+  ctx.textAlign = 'right';
+  ctx.fillText('culones-rpg', CANVAS_W - PADDING, footerY + 15);
+
+  return canvas.toBuffer('image/png');
+}

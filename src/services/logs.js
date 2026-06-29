@@ -1,6 +1,5 @@
 // src/services/logs.js
-// Carga los logs más recientes (con su categoría) para generar
-// una imagen tipo "lista de logs" desde /screenshot.
+// Carga logs desde Supabase para /screenshot logs.
 
 import { supabase } from './supabase.js';
 
@@ -24,4 +23,30 @@ export async function loadRecentLogs(limit = 10) {
     ...log,
     categoryInfo: categoriesBySlug.get(log.category) || null,
   }));
+}
+
+/**
+ * Carga un log específico por ID junto con sus mobs, items y
+ * datos de categoría. Para /screenshot logs ver:<id>
+ * @param {string} logId
+ */
+export async function loadLogById(logId) {
+  const [logRes, catsRes, mobsRes, itemsRes] = await Promise.all([
+    supabase.from('logs').select('*').eq('id', logId).single(),
+    supabase.from('categories').select('*'),
+    supabase.from('log_mobs').select('*').eq('log_id', logId).order('sort_order', { ascending: true }),
+    supabase.from('log_items').select('*').eq('log_id', logId).order('sort_order', { ascending: true }),
+  ]);
+
+  if (logRes.error) throw new Error(`[Logs] Error cargando log: ${logRes.error.message}`);
+
+  const categoriesBySlug = new Map((catsRes.data || []).map((c) => [c.slug, c]));
+  const log = logRes.data;
+
+  return {
+    ...log,
+    categoryInfo: categoriesBySlug.get(log.category) || null,
+    mobs:  mobsRes.data  || [],
+    items: itemsRes.data || [],
+  };
 }
