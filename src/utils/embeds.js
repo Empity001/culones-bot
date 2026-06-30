@@ -27,6 +27,64 @@ const CATEGORY_EMOJI = {
   evento: '🎉',
 };
 
+// Límite real de Discord por valor de campo de embed.
+const EMBED_FIELD_VALUE_LIMIT = 1024;
+
+/**
+ * Un bloque libre guarda su lista de campos (con sub-campos
+ * anidables opcionales) como JSON dentro de `obtained_from`,
+ * igual que en la web. Si el JSON es inválido o está vacío,
+ * devuelve un array vacío en vez de explotar.
+ */
+function parseLibreFields(item) {
+  if (!item?.obtained_from) return [];
+  try {
+    const parsed = JSON.parse(item.obtained_from);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Arma el texto completo (sin resumir) de un bloque libre: cada
+ * campo en su propia línea, con sub-campos indentados debajo, más
+ * descripción e imagen de referencia si las tiene. A diferencia de
+ * mobs/items, los bloques libres se muestran enteros porque su
+ * gracia es justamente poder llevar cualquier información custom
+ * que el admin haya decidido agregar.
+ */
+function formatLibreBlockValue(libre) {
+  const lines = [];
+  const fields = parseLibreFields(libre);
+
+  fields.forEach((field) => {
+    if (!field?.key) return;
+    if (field.value) lines.push(`**${field.key}:** ${field.value}`);
+    else lines.push(`**${field.key}**`);
+
+    (field.subfields || []).forEach((sub) => {
+      if (!sub?.key) return;
+      lines.push(`> ↳ **${sub.key}:** ${sub.value ?? ''}`);
+    });
+  });
+
+  if (libre.description) {
+    lines.push(`*${libre.description}*`);
+  }
+  if (libre.image_url) {
+    lines.push(`[🖼 Ver imagen de referencia](${libre.image_url})`);
+  }
+
+  if (lines.length === 0) return '_Sin campos._';
+
+  let value = lines.join('\n');
+  if (value.length > EMBED_FIELD_VALUE_LIMIT) {
+    value = `${value.slice(0, EMBED_FIELD_VALUE_LIMIT - 1)}…`;
+  }
+  return value;
+}
+
 /**
  * Crea el embed para un nuevo log del juego.
  * @param {object} log - fila de la tabla logs
@@ -97,12 +155,25 @@ export function buildLogEmbed(log, category, mobs = [], items = [], siteUrl = ''
     });
   }
 
-  // Bloques libres
+  // Bloques libres — a diferencia de mobs/items, se muestran
+  // COMPLETOS (no resumidos): un campo de embed por bloque, con
+  // todos sus campos/sub-campos, descripción e imagen si las tiene.
+  // Se limita la cantidad de campos por seguridad: Discord permite
+  // un máximo de 25 campos por embed (3 fijos + mobs + items ya
+  // ocupan hasta 5, así que dejamos margen de sobra).
+  const MAX_LIBRE_FIELDS = 19;
   const libres = items.filter((i) => i.item_type === '_libre');
-  if (libres.length > 0) {
+  libres.slice(0, MAX_LIBRE_FIELDS).forEach((libre) => {
     embed.addFields({
-      name: `📋 Bloques libres`,
-      value: libres.map((l) => `• ${l.name}`).join('\n'),
+      name: `📋 ${libre.name}`,
+      value: formatLibreBlockValue(libre),
+      inline: false,
+    });
+  });
+  if (libres.length > MAX_LIBRE_FIELDS) {
+    embed.addFields({
+      name: '📋 …',
+      value: `+${libres.length - MAX_LIBRE_FIELDS} bloque(s) libre(s) más — consulta la web para verlos todos.`,
       inline: false,
     });
   }

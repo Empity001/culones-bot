@@ -17,7 +17,7 @@ La web tiene un modo de administrador protegido por un código temporal — este
 
 El bot está suscrito en tiempo real a la tabla de logs de Supabase — no consulta cada X minutos, reacciona al instante cuando algo cambia.
 
-- **Log nuevo publicado en la web** → el bot construye un embed (título, descripción, categoría con su emoji/color, relevancia, fecha, y el detalle de cada mob/item/bloque libre adjunto) y lo publica en el canal configurado.
+- **Log nuevo publicado en la web** → el bot construye un embed (título, descripción, categoría con su emoji/color, relevancia, fecha, mobs e items resumidos en una línea cada uno, y **un campo completo por cada bloque libre** —campos, sub-campos, descripción e imagen, sin resumir, porque su gracia es justamente llevar información custom que no entra en un resumen genérico—) y lo publica en el canal configurado.
 - **Log editado en la web** → en vez de publicar un mensaje duplicado, el bot **edita el mismo mensaje de Discord ya existente** con la información actualizada. Si por algún motivo ese mensaje fue borrado manualmente del canal, el bot lo detecta y publica uno nuevo en su lugar.
 - **`/setlogchannel #canal`** — define a qué canal de texto se publican estos anuncios. Solo funciona para los IDs autorizados (el comando es visible para cualquiera, pero solo responde con éxito a quien está en la lista). El bot comprueba que tiene permiso de escritura en ese canal antes de guardarlo.
 
