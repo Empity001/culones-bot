@@ -4,6 +4,7 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import axios from 'axios';
 import { ensureFonts, FONT } from './fonts.js';
+import { supabase } from '../services/supabase.js';
 
 // ── Tokens de diseño ─────────────────────────────────────────────────────────
 const ITEM_SIZE    = 52;
@@ -19,30 +20,54 @@ const INK_400      = '#9a92b8';
 const imageCache = new Map();
 const IMAGE_FAIL_CACHE = new Set(); // URLs que fallaron: no reintentar en el mismo proceso
 
+// Extrae el path relativo dentro del bucket desde una URL pública de Supabase Storage
+// Ej: https://xxx.supabase.co/storage/v1/object/public/culones/tierlist/img.png → tierlist/img.png
+function extractStoragePath(url) {
+  const marker = '/object/public/culones/';
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  return url.slice(idx + marker.length);
+}
+
 async function fetchImage(url) {
   if (!url) return null;
   if (IMAGE_FAIL_CACHE.has(url)) return null;
   if (imageCache.has(url)) return imageCache.get(url);
+
   try {
-    const response = await axios.get(url, {
-      responseType: 'arraybuffer',
-      timeout: 10000,
-      // Muchos CDN (Discord, Imgur, etc.) bloquean peticiones sin User-Agent
-      // de navegador. Estos headers hacen que la petición parezca Chrome normal.
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-        'Referer': 'https://discord.com/',
-        'sec-fetch-dest': 'image',
-        'sec-fetch-mode': 'no-cors',
-        'sec-fetch-site': 'cross-site',
-      },
-    });
-    const img = await loadImage(Buffer.from(response.data));
+    let buffer;
+
+    // Intentar primero con Supabase Storage SDK (para imágenes en el bucket)
+    const storagePath = extractStoragePath(url);
+    if (storagePath) {
+      const { data, error } = await supabase.storage
+        .from('culones')
+        .download(storagePath);
+
+      if (!error && data) {
+        const arrayBuffer = await data.arrayBuffer();
+        buffer = Buffer.from(arrayBuffer);
+      }
+    }
+
+    // Fallback: fetch directo para imágenes externas (Discord CDN, imgur, etc.)
+    if (!buffer) {
+      const response = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'image/*,*/*;q=0.8',
+        },
+      });
+      buffer = Buffer.from(response.data);
+    }
+
+    const img = await loadImage(buffer);
     imageCache.set(url, img);
     return img;
-  } catch {
+  } catch (err) {
+    console.warn(`[renderTierlist] No se pudo cargar imagen: ${url} — ${err.message}`);
     IMAGE_FAIL_CACHE.add(url);
     return null;
   }
