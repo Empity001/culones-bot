@@ -1,9 +1,10 @@
 // src/utils/renderLogDetail.js
 // Genera una imagen PNG con el contenido completo de un log:
-// título, descripción, categoría, relevancia, mobs e items.
+// título, descripción, categoría, relevancia, mobs, items y bloques libres.
 
 import { createCanvas } from '@napi-rs/canvas';
 import { ensureFonts, FONT } from './fonts.js';
+import { splitItems, formatLibreForCanvas, measureLibreHeight } from './libreFields.js';
 
 // ── Tokens de diseño (mismo sistema que los otros renderers) ─────────────────
 const BG_COLOR    = '#0c0a14';
@@ -103,6 +104,10 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
   const measure = createCanvas(CANVAS_W, 10).getContext('2d');
   ensureFonts();
 
+  // Bug 3 fix: separar items normales de bloques libres desde el principio
+  const allItems = log.items || [];
+  const { normalItems, libres } = splitItems(allItems);
+
   let estimatedH = 56; // header
   estimatedH += PADDING;
 
@@ -113,6 +118,9 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
 
   // Meta: fecha + categoría + relevancia
   estimatedH += 22 + PADDING;
+
+  // Separador
+  estimatedH += 14;
 
   // Descripción
   if (log.description) {
@@ -129,12 +137,22 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
     estimatedH += 12;
   }
 
-  // Items
-  const items = log.items || [];
-  if (items.length > 0) {
+  // Items normales (bug 3 fix: excluye libres del cálculo de altura de esta sección)
+  if (normalItems.length > 0) {
     estimatedH += 24;
-    estimatedH += items.length * 52 + (items.length - 1) * 6;
+    estimatedH += normalItems.length * 52 + (normalItems.length - 1) * 6;
     estimatedH += 12;
+  }
+
+  // Bug 4 fix: altura dinámica para bloques libres (cada uno puede necesitar
+  // mucho más que 52px si tiene varios campos/sub-campos/descripción).
+  if (libres.length > 0) {
+    estimatedH += 24; // sección header
+    for (const libre of libres) {
+      estimatedH += measureLibreHeight(measure, libre, contentW - 24, FONT.sans);
+      estimatedH += 10; // gap entre cards
+    }
+    estimatedH += 8;
   }
 
   estimatedH += PADDING + 30; // footer
@@ -292,11 +310,12 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
     y += 4;
   }
 
-  // ── Items ─────────────────────────────────────────────────────────────────
-  if (items.length > 0) {
-    y = sectionHeader(ctx, `ITEMS (${items.length})`, GREEN, PADDING, y, contentW);
+  // ── Items normales ────────────────────────────────────────────────────────
+  // Bug 1+2+3 fix: solo items cuyo item_type !== '_libre', con contador correcto
+  if (normalItems.length > 0) {
+    y = sectionHeader(ctx, `ITEMS (${normalItems.length})`, GREEN, PADDING, y, contentW);
 
-    for (const item of items) {
+    for (const item of normalItems) {
       const cardH = 48;
 
       ctx.fillStyle = 'rgba(56,224,122,0.05)';
@@ -314,10 +333,10 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
       ctx.textBaseline = 'top';
       ctx.fillText(truncate(item.name, 34), PADDING + 12, y + 8);
 
-      // Meta: tier · tipo · origen
+      // Meta: tier · tipo · origen (texto limpio, nunca JSON crudo)
       const metaParts = [];
       if (item.tier)          metaParts.push(`Rango: ${item.tier}`);
-      if (item.item_type)     metaParts.push(`${item.item_type}`);
+      if (item.item_type)     metaParts.push(item.item_type);
       if (item.obtained_from) metaParts.push(`📍 ${item.obtained_from}`);
 
       if (metaParts.length) {
@@ -332,8 +351,93 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
     y += 4;
   }
 
+  // ── Bloques libres ────────────────────────────────────────────────────────
+  // Bug 1+2+4 fix: sección separada con card dinámica por cada bloque libre,
+  // parseando obtained_from como JSON (nunca como texto plano).
+  // Usamos violeta como color de acento para diferenciarlos visualmente.
+  const LIBRE_COLOR = '#9a72f5'; // violeta
+  if (libres.length > 0) {
+    y = sectionHeader(ctx, `BLOQUES LIBRES (${libres.length})`, LIBRE_COLOR, PADDING, y, contentW);
+
+    for (const libre of libres) {
+      const canvasLines = formatLibreForCanvas(libre);
+
+      // Calcular la altura real de esta card para que no se corte nada
+      const cardH = measureLibreHeight(ctx, libre, contentW - 24, FONT.sans);
+
+      ctx.fillStyle = 'rgba(154,114,245,0.06)';
+      roundRect(ctx, PADDING, y, contentW, cardH, 8);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(154,114,245,0.22)';
+      ctx.lineWidth = 1;
+      roundRect(ctx, PADDING, y, contentW, cardH, 8);
+      ctx.stroke();
+
+      // Nombre del bloque libre como título de la card
+      ctx.fillStyle    = INK_100;
+      ctx.font         = `bold 13px ${FONT.sans}`;
+      ctx.textAlign    = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(truncate(libre.name, 38), PADDING + 12, y + 8);
+
+      let innerY = y + 28;
+
+      if (canvasLines.length === 0) {
+        ctx.fillStyle = INK_400;
+        ctx.font      = `italic 11px ${FONT.sans}`;
+        ctx.fillText('Sin campos.', PADDING + 12, innerY);
+        innerY += 17;
+      } else {
+        for (const line of canvasLines) {
+          const effectiveMaxW = contentW - 24 - line.indent;
+
+          switch (line.style) {
+            case 'header':
+              ctx.fillStyle = LIBRE_COLOR;
+              ctx.font = `bold 11px ${FONT.sans}`;
+              break;
+            case 'value':
+              ctx.fillStyle = INK_100;
+              ctx.font = `11px ${FONT.sans}`;
+              break;
+            case 'sub':
+              ctx.fillStyle = INK_400;
+              ctx.font = `italic 11px ${FONT.sans}`;
+              break;
+            case 'desc':
+              ctx.fillStyle = 'rgba(255,255,255,0.6)';
+              ctx.font = `italic 11px ${FONT.sans}`;
+              break;
+            case 'img':
+              ctx.fillStyle = INK_600;
+              ctx.font = `10px ${FONT.sans}`;
+              break;
+            default:
+              ctx.fillStyle = INK_400;
+              ctx.font = `11px ${FONT.sans}`;
+          }
+
+          ctx.textBaseline = 'top';
+          ctx.textAlign    = 'left';
+
+          // Wrap de texto manual para esta línea
+          const wrapped = wrapText(ctx, line.text, effectiveMaxW);
+          const lineH   = line.style === 'img' ? 15 : (line.style === 'sub' ? 16 : 17);
+          for (const wrappedLine of wrapped) {
+            ctx.fillText(wrappedLine, PADDING + 12 + line.indent, innerY);
+            innerY += lineH;
+          }
+        }
+      }
+
+      y += cardH + 10;
+    }
+    y += 4;
+  }
+
   // ── Vacío ─────────────────────────────────────────────────────────────────
-  if (!log.description && mobs.length === 0 && items.length === 0) {
+  // Bug 5 fix: el check de vacío usa normalItems + libres, no el array completo
+  if (!log.description && mobs.length === 0 && normalItems.length === 0 && libres.length === 0) {
     ctx.fillStyle    = INK_600;
     ctx.font         = `13px ${FONT.sans}`;
     ctx.textAlign    = 'center';

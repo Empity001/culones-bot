@@ -2,6 +2,7 @@
 // Construye los embeds de Discord para los distintos tipos de notificación.
 
 import { EmbedBuilder, Colors } from 'discord.js';
+import { parseLibreFields, splitItems } from './libreFields.js';
 
 // Colores según relevancia
 const RELEVANCE_COLOR = {
@@ -31,28 +32,9 @@ const CATEGORY_EMOJI = {
 const EMBED_FIELD_VALUE_LIMIT = 1024;
 
 /**
- * Un bloque libre guarda su lista de campos (con sub-campos
- * anidables opcionales) como JSON dentro de `obtained_from`,
- * igual que en la web. Si el JSON es inválido o está vacío,
- * devuelve un array vacío en vez de explotar.
- */
-function parseLibreFields(item) {
-  if (!item?.obtained_from) return [];
-  try {
-    const parsed = JSON.parse(item.obtained_from);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Arma el texto completo (sin resumir) de un bloque libre: cada
- * campo en su propia línea, con sub-campos indentados debajo, más
- * descripción e imagen de referencia si las tiene. A diferencia de
- * mobs/items, los bloques libres se muestran enteros porque su
- * gracia es justamente poder llevar cualquier información custom
- * que el admin haya decidido agregar.
+ * Arma el texto completo (sin resumir) de un bloque libre para el embed.
+ * Usa Markdown de Discord (negritas, cursiva) y el límite de 1024 chars.
+ * Para canvas ver formatLibreForCanvas en libreFields.js.
  */
 function formatLibreBlockValue(libre) {
   const lines = [];
@@ -139,8 +121,8 @@ export function buildLogEmbed(log, category, mobs = [], items = [], siteUrl = ''
     });
   }
 
-  // Items normales (excluye libres)
-  const normalItems = items.filter((i) => i.item_type !== '_libre');
+  // Items normales (excluye libres) y bloques libres
+  const { normalItems, libres } = splitItems(items);
   if (normalItems.length > 0) {
     const itemLines = normalItems.map((i) => {
       const parts = [`**${i.name}**`];
@@ -162,7 +144,6 @@ export function buildLogEmbed(log, category, mobs = [], items = [], siteUrl = ''
   // un máximo de 25 campos por embed (3 fijos + mobs + items ya
   // ocupan hasta 5, así que dejamos margen de sobra).
   const MAX_LIBRE_FIELDS = 19;
-  const libres = items.filter((i) => i.item_type === '_libre');
   libres.slice(0, MAX_LIBRE_FIELDS).forEach((libre) => {
     embed.addFields({
       name: `📋 ${libre.name}`,
