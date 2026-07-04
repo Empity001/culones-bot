@@ -17,6 +17,7 @@
     "discord.js": "^14.16.3",
     "node-cron": "^3.0.3",
     "@napi-rs/canvas": "^0.1.51",
-    "axios": "^1.7.2"
+    "axios": "^1.7.2",
+    "@fontsource/noto-emoji": "^5.2.11"
   }
 }

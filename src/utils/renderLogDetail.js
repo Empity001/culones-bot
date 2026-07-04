@@ -5,6 +5,7 @@
 import { createCanvas } from '@napi-rs/canvas';
 import { ensureFonts, FONT } from './fonts.js';
 import { splitItems, formatLibreForCanvas, measureLibreHeight, measureLibreTitleHeight, formatEquipmentForCanvas, formatSourceForCanvas } from './libreFields.js';
+import { fillTextWithEmoji, measureTextWithEmoji } from './emojiText.js';
 
 // ── Tokens de diseño (mismo sistema que los otros renderers) ─────────────────
 const BG_COLOR    = '#0c0a14';
@@ -59,7 +60,7 @@ function wrapText(ctx, text, maxWidth) {
   let current = '';
   for (const word of words) {
     const test = current ? `${current} ${word}` : word;
-    if (ctx.measureText(test).width > maxWidth && current) {
+    if (measureTextWithEmoji(ctx, test) > maxWidth && current) {
       lines.push(current);
       current = word;
     } else {
@@ -179,7 +180,7 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
   ctx.font         = `bold 17px ${FONT.sans}`;
   ctx.textAlign    = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText('📜 DETALLE DE LOG', PADDING, HEADER_H / 2);
+  fillTextWithEmoji(ctx, '📜 DETALLE DE LOG', PADDING, HEADER_H / 2);
 
   // Fecha en el header
   const dateStr = new Date(log.created_at).toLocaleDateString('es-ES', {
@@ -214,16 +215,17 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
   if (cat) {
     const catLabel = `${cat.emoji || ''} ${cat.label}`;
     ctx.fillStyle = cat.color || INK_400;
-    ctx.fillText(catLabel, metaX, y + 8);
-    metaX += ctx.measureText(catLabel).width + 14;
+    fillTextWithEmoji(ctx, catLabel, metaX, y + 8);
+    metaX += measureTextWithEmoji(ctx, catLabel) + 14;
   }
 
   ctx.fillStyle = relColor;
-  ctx.fillText(`⚡ ${RELEVANCE_LABEL[log.relevance] || log.relevance || '—'}`, metaX, y + 8);
-  metaX += ctx.measureText(`⚡ ${RELEVANCE_LABEL[log.relevance] || ''}  `).width + 14;
+  const relevanceText = `⚡ ${RELEVANCE_LABEL[log.relevance] || log.relevance || '—'}`;
+  fillTextWithEmoji(ctx, relevanceText, metaX, y + 8);
+  metaX += measureTextWithEmoji(ctx, relevanceText) + 14;
 
   ctx.fillStyle = MAGENTA;
-  ctx.fillText(`❤ ${log.likes ?? 0}`, metaX, y + 8);
+  fillTextWithEmoji(ctx, `❤ ${log.likes ?? 0}`, metaX, y + 8);
 
   y += 22 + PADDING;
 
@@ -285,8 +287,8 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
       ctx.font = `11px ${FONT.sans}`;
       for (const st of stats) {
         ctx.fillStyle = INK_400;
-        ctx.fillText(`${st.label}: `, sx, sy);
-        const labelW = ctx.measureText(`${st.label}: `).width;
+        fillTextWithEmoji(ctx, `${st.label}: `, sx, sy);
+        const labelW = measureTextWithEmoji(ctx, `${st.label}: `);
         ctx.fillStyle = st.color;
         ctx.font = `bold 11px ${FONT.sans}`;
         ctx.fillText(String(st.value), sx + labelW, sy);
@@ -303,7 +305,7 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
         ctx.fillStyle    = INK_400;
         ctx.font         = `10px ${FONT.sans}`;
         ctx.textBaseline = 'top';
-        ctx.fillText(truncate(metaParts.join('  ·  '), 72), PADDING + 12, y + 48);
+        fillTextWithEmoji(ctx, truncate(metaParts.join('  ·  '), 72), PADDING + 12, y + 48);
       }
 
       y += cardH + 8;
@@ -345,7 +347,7 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
         ctx.fillStyle    = INK_400;
         ctx.font         = `10.5px ${FONT.sans}`;
         ctx.textBaseline = 'top';
-        ctx.fillText(truncate(metaParts.join('  ·  '), 76), PADDING + 12, y + 28);
+        fillTextWithEmoji(ctx, truncate(metaParts.join('  ·  '), 76), PADDING + 12, y + 28);
       }
 
       y += cardH + 6;
@@ -431,7 +433,7 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
           const wrapped = wrapText(ctx, line.text, effectiveMaxW);
           const lineH   = line.style === 'img' ? 15 : (line.style === 'sub' ? 16 : 17);
           for (const wrappedLine of wrapped) {
-            ctx.fillText(wrappedLine, PADDING + 12 + line.indent, innerY);
+            fillTextWithEmoji(ctx, wrappedLine, PADDING + 12 + line.indent, innerY);
             innerY += lineH;
           }
         }

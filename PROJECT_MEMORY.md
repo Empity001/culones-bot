@@ -4,6 +4,39 @@ Registro de sesiones de desarrollo del bot de Discord. Cada entrada resume qué 
 
 ---
 
+# Sesión 6 — soporte real de emoji en screenshots de canvas
+
+Después de la prueba visual se confirmó que los cuadros vacíos no eran datos faltantes: `@napi-rs/canvas` estaba intentando dibujar emoji con `Liberation Sans`, una fuente sin glifos de emoji. En Linux/Railway tampoco había una fuente de emoji del sistema disponible como fallback.
+
+**Correcciones hechas:**
+- `package.json`
+  - Se agregó `@fontsource/noto-emoji` como dependencia de producción.
+- `src/utils/fonts.js`
+  - Registra los subconjuntos WOFF2 de `Noto Color Emoji` desde `node_modules`, además de las fuentes Liberation existentes.
+  - Se agregó `FONT.emoji`.
+- `src/utils/emojiText.js` — archivo nuevo.
+  - Separa cada cadena por grafemas con `Intl.Segmenter`.
+  - Dibuja texto normal con `CulonesUI` y cada emoji con `Noto Color Emoji`.
+  - Respeta alineación izquierda, centrada y derecha, y permite medir cadenas mixtas correctamente.
+- `src/utils/renderLogDetail.js`
+  - Usa el helper para el pergamino del encabezado, emoji de categoría, relevancia, likes, estadísticas de mobs, equipamiento, ubicaciones, origen de items y líneas de bloques libres.
+- `src/utils/renderLogs.js`
+  - Usa el helper en el encabezado y metadatos de cada log.
+- `src/utils/renderWeaponCatalog.js`
+  - Usa el helper en el encabezado del catálogo.
+
+**Verificación:**
+- `node --check` pasa en todos los archivos modificados.
+- Se generaron localmente imágenes de prueba de detalle y lista de logs; los emoji se ven a color y el texto normal permanece visible.
+
+Pendiente:
+- Subir el patch y volver a desplegar para confirmar el resultado dentro de Discord/Railway.
+
+Problemas conocidos:
+- Los emoji se renderizan con el diseño de Noto Color Emoji, que puede verse ligeramente distinto al emoji nativo de Discord/Windows.
+
+---
+
 # Sesión 5 — hotfix de JSON legacy en mobs/items y bloques libres vacíos
 
 Después de probar visualmente `/screenshot logs ver:<log>` en Discord, se detectó que el fix de bloques libres había resuelto `_libre` y el JSON crudo de `obtained_from` para libres, pero quedaban otros valores legacy guardados como JSON en secciones normales:

@@ -5,6 +5,7 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import axios from 'axios';
 import { ensureFonts, FONT } from './fonts.js';
+import { fillTextWithEmoji } from './emojiText.js';
 
 // ── Tokens de diseño ─────────────────────────────────────────────────────────
 const BG_COLOR    = '#0c0a14';
@@ -132,7 +133,7 @@ export async function renderWeaponCatalogImage(weapons, filterLabel = 'Todas', s
   ctx.font         = `bold 18px ${FONT.sans}`;
   ctx.textAlign    = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText(`⚔️ CATÁLOGO DE ARMAS · ${filterLabel.toUpperCase()}`, PADDING, HEADER_H / 2);
+  fillTextWithEmoji(ctx, `⚔️ CATÁLOGO DE ARMAS · ${filterLabel.toUpperCase()}`, PADDING, HEADER_H / 2);
 
   ctx.fillStyle = INK_400;
   ctx.font      = `11px ${FONT.sans}`;

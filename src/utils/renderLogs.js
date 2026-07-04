@@ -4,6 +4,7 @@
 
 import { createCanvas } from '@napi-rs/canvas';
 import { ensureFonts, FONT } from './fonts.js';
+import { fillTextWithEmoji, measureTextWithEmoji } from './emojiText.js';
 
 // ── Tokens de diseño (compartidos entre los tres renderers) ─────────────────
 const BG_COLOR    = '#0c0a14';
@@ -85,7 +86,7 @@ export function renderLogsImage(logs, serverName = 'Culones RPG') {
   ctx.font        = `bold 18px ${FONT.sans}`;
   ctx.textAlign   = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText('📜 LOGS RECIENTES', PADDING, HEADER_H / 2);
+  fillTextWithEmoji(ctx, '📜 LOGS RECIENTES', PADDING, HEADER_H / 2);
 
   ctx.fillStyle = INK_400;
   ctx.font      = `11px ${FONT.sans}`;
@@ -135,12 +136,12 @@ export function renderLogsImage(logs, serverName = 'Culones RPG') {
     if (cat) {
       const label = `${cat.emoji || ''} ${cat.label}`;
       ctx.fillStyle = cat.color || INK_400;
-      ctx.fillText(label, metaX, y + 31);
-      metaX += ctx.measureText(label).width + 14;
+      fillTextWithEmoji(ctx, label, metaX, y + 31);
+      metaX += measureTextWithEmoji(ctx, label) + 14;
     }
 
     ctx.fillStyle = relColor;
-    ctx.fillText(`⚡ ${RELEVANCE_LABEL[log.relevance] || log.relevance}`, metaX, y + 31);
+    fillTextWithEmoji(ctx, `⚡ ${RELEVANCE_LABEL[log.relevance] || log.relevance}`, metaX, y + 31);
 
     // Fecha y likes (derecha)
     ctx.fillStyle    = INK_600;
@@ -153,7 +154,7 @@ export function renderLogsImage(logs, serverName = 'Culones RPG') {
     ctx.fillText(dateStr, CANVAS_W - PADDING - 12, y + 9);
 
     ctx.fillStyle = MAGENTA;
-    ctx.fillText(`❤ ${log.likes ?? 0}`, CANVAS_W - PADDING - 12, y + 31);
+    fillTextWithEmoji(ctx, `❤ ${log.likes ?? 0}`, CANVAS_W - PADDING - 12, y + 31);
     ctx.textAlign = 'left';
 
     y += ROW_H + 8;

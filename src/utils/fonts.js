@@ -21,15 +21,18 @@
 import { GlobalFonts } from '@napi-rs/canvas';
 import { fileURLToPath } from 'url';
 import { join, dirname } from 'path';
+import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FONTS_DIR = join(__dirname, '../assets/fonts');
+const require = createRequire(import.meta.url);
 
 // Nombres de familia tal como los registramos — usar estos
 // en todas las llamadas ctx.font para consistencia.
 export const FONT = {
   sans: 'CulonesUI',       // Liberation Sans — cuerpo y títulos
   mono: 'CulonesMono',     // Liberation Mono — datos técnicos
+  emoji: 'Noto Color Emoji', // emoji a color instalado desde @fontsource/noto-emoji
 };
 
 let _registered = false;
@@ -55,8 +58,22 @@ export function ensureFonts() {
       join(FONTS_DIR, 'LiberationMono-Regular.ttf'),
       FONT.mono
     );
+
+    // Fontsource divide Noto Color Emoji en subconjuntos unicode. Registramos
+    // todos bajo su familia interna real para que funcione igual en Railway,
+    // Windows y Linux sin depender de fuentes instaladas en el sistema.
+    const emojiRoot = dirname(require.resolve('@fontsource/noto-emoji/package.json'));
+    for (let subset = 0; subset <= 9; subset++) {
+      GlobalFonts.registerFromPath(
+        join(emojiRoot, 'files', `noto-emoji-${subset}-400-normal.woff2`)
+      );
+    }
+    GlobalFonts.registerFromPath(
+      join(emojiRoot, 'files', 'noto-emoji-emoji-400-normal.woff2')
+    );
+
     _registered = true;
-    console.log('[Fonts] ✓ Fuentes bundleadas registradas correctamente');
+    console.log('[Fonts] ✓ Fuentes de interfaz y emoji registradas correctamente');
   } catch (err) {
     // Si falla (entorno de dev con fuentes del sistema), logueamos pero no rompemos.
     // El canvas usará el fallback del sistema — en dev está bien, en prod hay que

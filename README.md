@@ -146,3 +146,7 @@ sql/
 ## Nota QA screenshots
 
 El renderer de `/screenshot logs ver:<log>` también limpia valores legacy guardados como JSON en `equipment` de mobs y `obtained_from` de items normales, para evitar que Discord muestre arrays JSON crudos en la imagen.
+
+## Emoji en imágenes generadas
+
+Los renderers de canvas usan `Liberation Sans` para el texto y `Noto Color Emoji` para los emoji. La fuente de emoji se instala mediante la dependencia `@fontsource/noto-emoji`, por lo que también funciona en Railway/Linux sin depender de fuentes del sistema. El helper `src/utils/emojiText.js` divide las cadenas mixtas para evitar cuadros vacíos o texto invisible.
