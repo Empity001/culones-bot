@@ -2,84 +2,129 @@
 // =========================================================
 // Registro centralizado de fuentes para @napi-rs/canvas.
 //
-// PROBLEMA: En servidores Linux sin entorno gráfico (Railway,
-// Render, Fly.io, VPS) el sistema no tiene fuentes GUI
-// instaladas. @napi-rs/canvas resuelve 'sans-serif' a nada,
-// dibujando texto invisible — las barras/cajas del render
-// aparecen pero el texto no se ve.
+// ESTRATEGIA DE EMOJI (3 capas, de más a menos robusta):
 //
-// SOLUCIÓN: Bundlear las fuentes directamente en el repo
-// (Liberation Sans, licencia SIL OFL — libre para distribución)
-// y registrarlas con GlobalFonts antes del primer render.
+//   Capa 1 — @fontsource/noto-emoji instalado como dependencia:
+//     Si el paquete existe y sus archivos woff2 tienen el nombre
+//     estándar que fontsource usa en v5, los cargamos todos.
 //
-// USO (en cada renderer, al inicio del archivo):
-//   import { ensureFonts, FONT } from './fonts.js';
-//   await ensureFonts(); // idempotente, solo carga una vez
-//   ctx.font = `bold 16px ${FONT.sans}`;
+//   Capa 2 — fuentes del sistema Linux (Railway / Ubuntu):
+//     Railway corre sobre Ubuntu. Si la capa 1 falla, buscamos
+//     NotoColorEmoji.ttf en las rutas estándar de Ubuntu.
+//
+//   Capa 3 — sustitución en texto (texto legible sin emoji):
+//     Si las dos anteriores fallan, fillTextWithEmoji() sigue
+//     funcionando pero los emojis se muestran como □. El código
+//     de renderizado usa `emojiAscii()` como texto alternativo
+//     para las secciones críticas (❤ → HP, ⚔ → DMG, etc.)
+//     para que el canvas siempre sea legible.
 // =========================================================
 
 import { GlobalFonts } from '@napi-rs/canvas';
 import { fileURLToPath } from 'url';
 import { join, dirname } from 'path';
-import { createRequire } from 'module';
+import { existsSync, readdirSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FONTS_DIR = join(__dirname, '../assets/fonts');
-const require = createRequire(import.meta.url);
 
-// Nombres de familia tal como los registramos — usar estos
-// en todas las llamadas ctx.font para consistencia.
 export const FONT = {
-  sans: 'CulonesUI',       // Liberation Sans — cuerpo y títulos
-  mono: 'CulonesMono',     // Liberation Mono — datos técnicos
-  emoji: 'Noto Color Emoji', // emoji a color instalado desde @fontsource/noto-emoji
+  sans:  'CulonesUI',
+  mono:  'CulonesMono',
+  emoji: 'Noto Color Emoji',
 };
+
+// true  = la fuente de emoji quedó registrada (los emojis se ven)
+// false = no se encontró ninguna fuente de emoji (los emojis son □)
+export let emojiAvailable = false;
 
 let _registered = false;
 
-/**
- * Registra las fuentes bundleadas con GlobalFonts.
- * Es idempotente: la segunda llamada es un no-op barato.
- * Debe llamarse antes de cualquier operación de renderizado.
- */
+// ─── Capa 1: @fontsource/noto-emoji ──────────────────────────────────────────
+function tryLoadFontsource() {
+  try {
+    // fontsource v5 estructura: files/noto-emoji-{subset}-400-normal.woff2
+    // Los subsets pueden ser rangos unicode (u1f600-u1f64f) o números (0..9).
+    // Buscamos dinámicamente todos los woff2 del paquete para no depender
+    // de nombres hardcodeados que cambian entre versiones.
+    const pkgPath = new URL(
+      '../../../node_modules/@fontsource/noto-emoji/files',
+      import.meta.url
+    ).pathname;
+
+    if (!existsSync(pkgPath)) return false;
+
+    const files = readdirSync(pkgPath).filter((f) => f.endsWith('.woff2'));
+    if (files.length === 0) return false;
+
+    let loaded = 0;
+    for (const file of files) {
+      try {
+        GlobalFonts.registerFromPath(join(pkgPath, file));
+        loaded++;
+      } catch {
+        // Ignorar archivos corruptos/no soportados y seguir
+      }
+    }
+    return loaded > 0;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Capa 2: fuentes del sistema Linux (Railway / Ubuntu) ────────────────────
+const SYSTEM_EMOJI_PATHS = [
+  // Ubuntu / Debian
+  '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
+  '/usr/share/fonts/noto/NotoColorEmoji.ttf',
+  '/usr/share/fonts/truetype/noto-color-emoji/NotoColorEmoji.ttf',
+  // Fallback: cualquier Noto en el sistema
+  '/usr/share/fonts/opentype/noto/NotoColorEmoji.ttf',
+  // macOS (dev local)
+  '/System/Library/Fonts/Apple Color Emoji.ttc',
+];
+
+function tryLoadSystemEmoji() {
+  for (const path of SYSTEM_EMOJI_PATHS) {
+    if (existsSync(path)) {
+      try {
+        GlobalFonts.registerFromPath(path);
+        return true;
+      } catch {
+        // Intentar el siguiente
+      }
+    }
+  }
+  return false;
+}
+
 export function ensureFonts() {
   if (_registered) return;
 
+  // Fuentes de interfaz (siempre bundleadas — estas nunca fallan)
   try {
-    GlobalFonts.registerFromPath(
-      join(FONTS_DIR, 'LiberationSans-Regular.ttf'),
-      FONT.sans
-    );
-    GlobalFonts.registerFromPath(
-      join(FONTS_DIR, 'LiberationSans-Bold.ttf'),
-      FONT.sans        // mismo family name → bold se activa con 'bold' en ctx.font
-    );
-    GlobalFonts.registerFromPath(
-      join(FONTS_DIR, 'LiberationMono-Regular.ttf'),
-      FONT.mono
-    );
-
-    // Fontsource divide Noto Color Emoji en subconjuntos unicode. Registramos
-    // todos bajo su familia interna real para que funcione igual en Railway,
-    // Windows y Linux sin depender de fuentes instaladas en el sistema.
-    const emojiRoot = dirname(require.resolve('@fontsource/noto-emoji/package.json'));
-    for (let subset = 0; subset <= 9; subset++) {
-      GlobalFonts.registerFromPath(
-        join(emojiRoot, 'files', `noto-emoji-${subset}-400-normal.woff2`)
-      );
-    }
-    GlobalFonts.registerFromPath(
-      join(emojiRoot, 'files', 'noto-emoji-emoji-400-normal.woff2')
-    );
-
-    _registered = true;
-    console.log('[Fonts] ✓ Fuentes de interfaz y emoji registradas correctamente');
+    GlobalFonts.registerFromPath(join(FONTS_DIR, 'LiberationSans-Regular.ttf'), FONT.sans);
+    GlobalFonts.registerFromPath(join(FONTS_DIR, 'LiberationSans-Bold.ttf'),    FONT.sans);
+    GlobalFonts.registerFromPath(join(FONTS_DIR, 'LiberationMono-Regular.ttf'), FONT.mono);
+    console.log('[Fonts] ✓ Fuentes de interfaz registradas.');
   } catch (err) {
-    // Si falla (entorno de dev con fuentes del sistema), logueamos pero no rompemos.
-    // El canvas usará el fallback del sistema — en dev está bien, en prod hay que
-    // asegurarse de que los TTF estén en src/assets/fonts/.
-    console.warn('[Fonts] ⚠ No se pudieron registrar las fuentes bundleadas:', err.message);
-    console.warn('[Fonts]   Verificá que src/assets/fonts/*.ttf existan en el repo.');
-    _registered = true; // marcar como intentado para no reintentar en loop
+    console.warn('[Fonts] ⚠ Error cargando fuentes de interfaz:', err.message);
   }
+
+  // Fuente de emoji — intentar las 3 capas en orden
+  if (tryLoadFontsource()) {
+    emojiAvailable = true;
+    console.log('[Fonts] ✓ Emoji cargado desde @fontsource/noto-emoji.');
+  } else if (tryLoadSystemEmoji()) {
+    emojiAvailable = true;
+    console.log('[Fonts] ✓ Emoji cargado desde fuentes del sistema.');
+  } else {
+    emojiAvailable = false;
+    console.warn(
+      '[Fonts] ⚠ No se encontró fuente de emoji. Los emojis se mostrarán como texto alternativo.\n' +
+      '[Fonts]   Para arreglar: descarga NotoColorEmoji.ttf y ponla en src/assets/fonts/.'
+    );
+  }
+
+  _registered = true;
 }

@@ -1,12 +1,16 @@
 // src/utils/emojiText.js
 // Dibujo de texto mixto (texto normal + emoji) para @napi-rs/canvas.
 //
-// Skia elige una sola familia para cada llamada a fillText(). Cuando una cadena
-// empieza con un emoji y usamos una fuente normal, el emoji se vuelve un cuadro;
-// si usamos la fuente de emoji, las letras pueden desaparecer. Estas funciones
-// separan la cadena por grafemas y dibujan cada tramo con su fuente correcta.
+// Cuando una fuente de emoji está disponible (emojiAvailable = true),
+// cada grapheme se dibuja con su fuente correspondiente (texto con
+// CulonesUI, emoji con Noto Color Emoji).
+//
+// Cuando NO está disponible, fillTextWithEmoji() actúa como un
+// ctx.fillText() normal — los emojis aparecerán como □ pero el
+// texto que los rodea se ve correcto. El código de renderizado
+// usa etiquetas de texto alternativas para las secciones críticas.
 
-import { FONT } from './fonts.js';
+import { FONT, emojiAvailable } from './fonts.js';
 
 const graphemeSegmenter = new Intl.Segmenter('es', { granularity: 'grapheme' });
 const EMOJI_GRAPHEME_RE = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20e3]/u;
@@ -40,9 +44,17 @@ function emojiFontFrom(textFont) {
 
 /**
  * Mide una cadena que puede mezclar texto y emoji.
- * Devuelve un número para poder reemplazar directamente ctx.measureText(...).width.
+ * Si no hay fuente de emoji disponible, mide todo con la fuente actual.
  */
 export function measureTextWithEmoji(ctx, value, textFont = ctx.font) {
+  if (!emojiAvailable) {
+    const prev = ctx.font;
+    ctx.font = textFont;
+    const w = ctx.measureText(String(value ?? '')).width;
+    ctx.font = prev;
+    return w;
+  }
+
   const previousFont = ctx.font;
   const emojiFont = emojiFontFrom(textFont);
   let width = 0;
@@ -58,9 +70,19 @@ export function measureTextWithEmoji(ctx, value, textFont = ctx.font) {
 
 /**
  * Dibuja texto mixto respetando ctx.textAlign, ctx.textBaseline y ctx.fillStyle.
+ * Si no hay fuente de emoji disponible, actúa como ctx.fillText() normal.
  * Restaura la fuente y alineación originales al terminar.
  */
 export function fillTextWithEmoji(ctx, value, x, y, textFont = ctx.font) {
+  // Sin fuente de emoji: dibujo directo para que al menos el texto se vea
+  if (!emojiAvailable) {
+    const prev = ctx.font;
+    ctx.font = textFont;
+    ctx.fillText(String(value ?? ''), x, y);
+    ctx.font = prev;
+    return ctx.measureText(String(value ?? '')).width;
+  }
+
   const runs = splitRuns(value);
   if (runs.length === 0) return 0;
 

@@ -180,7 +180,7 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
   ctx.font         = `bold 17px ${FONT.sans}`;
   ctx.textAlign    = 'left';
   ctx.textBaseline = 'middle';
-  fillTextWithEmoji(ctx, '📜 DETALLE DE LOG', PADDING, HEADER_H / 2);
+  ctx.fillText('DETALLE DE LOG', PADDING, HEADER_H / 2);
 
   // Fecha en el header
   const dateStr = new Date(log.created_at).toLocaleDateString('es-ES', {
@@ -213,19 +213,19 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
   let metaX = PADDING + 14;
 
   if (cat) {
-    const catLabel = `${cat.emoji || ''} ${cat.label}`;
+    const catLabel = cat.label || '';
     ctx.fillStyle = cat.color || INK_400;
-    fillTextWithEmoji(ctx, catLabel, metaX, y + 8);
-    metaX += measureTextWithEmoji(ctx, catLabel) + 14;
+    ctx.fillText(catLabel, metaX, y + 8);
+    metaX += ctx.measureText(catLabel).width + 14;
   }
 
   ctx.fillStyle = relColor;
-  const relevanceText = `⚡ ${RELEVANCE_LABEL[log.relevance] || log.relevance || '—'}`;
-  fillTextWithEmoji(ctx, relevanceText, metaX, y + 8);
-  metaX += measureTextWithEmoji(ctx, relevanceText) + 14;
+  const relevanceText = RELEVANCE_LABEL[log.relevance] || log.relevance || '—';
+  ctx.fillText(relevanceText, metaX, y + 8);
+  metaX += ctx.measureText(relevanceText).width + 14;
 
   ctx.fillStyle = MAGENTA;
-  fillTextWithEmoji(ctx, `❤ ${log.likes ?? 0}`, metaX, y + 8);
+  ctx.fillText(`+${log.likes ?? 0}`, metaX, y + 8);
 
   y += 22 + PADDING;
 
@@ -276,11 +276,12 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
       ctx.textBaseline = 'top';
       ctx.fillText(truncate(mob.name, 34), PADDING + 12, y + 10);
 
-      // Stats en fila
+      // Stats en fila — usamos etiquetas de texto cortas para que sean
+      // legibles aunque la fuente de emoji no esté disponible en el servidor.
       const stats = [];
-      if (mob.health != null) stats.push({ label: '❤ Vida',   value: mob.health, color: MAGENTA });
-      if (mob.damage != null) stats.push({ label: '⚔ Daño',   value: mob.damage, color: GOLD });
-      if (mob.armor  != null) stats.push({ label: '🛡 Armor',  value: mob.armor,  color: CYAN });
+      if (mob.health != null) stats.push({ label: 'Vida',  value: mob.health, color: MAGENTA });
+      if (mob.damage != null) stats.push({ label: 'Daño',  value: mob.damage, color: GOLD });
+      if (mob.armor  != null) stats.push({ label: 'Armor', value: mob.armor,  color: CYAN });
 
       let sx = PADDING + 12;
       const sy = y + 30;
@@ -299,8 +300,8 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
       // Equipamiento / ubicación
       const metaParts = [];
       const equipmentText = formatEquipmentForCanvas(mob.equipment);
-      if (equipmentText) metaParts.push(`🎒 ${equipmentText}`);
-      if (mob.location)  metaParts.push(`📍 ${mob.location}`);
+      if (equipmentText) metaParts.push(equipmentText);
+      if (mob.location)  metaParts.push(mob.location);
       if (metaParts.length) {
         ctx.fillStyle    = INK_400;
         ctx.font         = `10px ${FONT.sans}`;
@@ -341,13 +342,13 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
       if (item.tier)          metaParts.push(`Rango: ${item.tier}`);
       if (item.item_type)     metaParts.push(item.item_type);
       const sourceText = formatSourceForCanvas(item.obtained_from);
-      if (sourceText) metaParts.push(`📍 ${sourceText}`);
+      if (sourceText) metaParts.push(sourceText);
 
       if (metaParts.length) {
         ctx.fillStyle    = INK_400;
         ctx.font         = `10.5px ${FONT.sans}`;
         ctx.textBaseline = 'top';
-        fillTextWithEmoji(ctx, truncate(metaParts.join('  ·  '), 76), PADDING + 12, y + 28);
+        ctx.fillText(truncate(metaParts.join('  ·  '), 76), PADDING + 12, y + 28);
       }
 
       y += cardH + 6;
@@ -433,7 +434,7 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
           const wrapped = wrapText(ctx, line.text, effectiveMaxW);
           const lineH   = line.style === 'img' ? 15 : (line.style === 'sub' ? 16 : 17);
           for (const wrappedLine of wrapped) {
-            fillTextWithEmoji(ctx, wrappedLine, PADDING + 12 + line.indent, innerY);
+            ctx.fillText(wrappedLine, PADDING + 12 + line.indent, innerY);
             innerY += lineH;
           }
         }

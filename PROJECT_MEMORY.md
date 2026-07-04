@@ -4,6 +4,47 @@ Registro de sesiones de desarrollo del bot de Discord. Cada entrada resume qué 
 
 ---
 
+# Sesión 7 — Fix definitivo de emojis en canvas + limpieza de texto
+
+**Problema raíz confirmado:** `fonts.js` cargaba los subsets de `@fontsource/noto-emoji` asumiendo nombres de archivo fijos (`noto-emoji-0-400-normal.woff2`, etc.) que no coinciden con la estructura real del paquete en su versión instalada. El `try/catch` marcaba `_registered = true` aunque la carga hubiera fallado silenciosamente, dejando la fuente de emoji sin registrar. Resultado: todos los emojis en canvas aparecían como cuadros vacíos □.
+
+**Archivos modificados:**
+
+- **`src/utils/fonts.js`** — reescrito con estrategia de 3 capas:
+  - *Capa 1*: lee dinámicamente todos los `.woff2` del directorio `@fontsource/noto-emoji/files` con `readdirSync`, sin asumir nombres fijos. Si el directorio existe y tiene archivos, los registra todos.
+  - *Capa 2*: si la capa 1 falla, busca `NotoColorEmoji.ttf` en las rutas estándar de Ubuntu/Debian donde Railway lo tiene instalado (`/usr/share/fonts/truetype/noto/...`).
+  - *Capa 3*: si ambas fallan, exporta `emojiAvailable = false` y loguea un aviso claro con instrucciones para el fix manual (copiar el TTF al repo).
+  - El `_registered = true` ya no se marca si la carga de emoji falló — solo cuando al menos una capa tuvo éxito.
+
+- **`src/utils/emojiText.js`** — usa `emojiAvailable` importado de `fonts.js`:
+  - Cuando es `false`, `fillTextWithEmoji` actúa como `ctx.fillText` directo (sin intentar cambiar la fuente a una que no existe). Resultado: el texto se ve pero sin emoji, en vez de cuadros.
+  - Cuando es `true`, el comportamiento de segmentación por grafema y cambio de fuente sigue exactamente igual que antes.
+
+- **`src/utils/renderLogDetail.js`** — eliminados los emojis de todas las secciones críticas que se veían como □ en el screenshot:
+  - Header: `📜 DETALLE DE LOG` → `DETALLE DE LOG`
+  - Meta row (categoría/relevancia/likes): eliminados ⚡ y ❤, los textos de categoría/relevancia se dibujan con `ctx.fillText` directo. Likes: `❤ 2` → `+2`
+  - Stats de mobs: `❤ Vida` / `⚔ Daño` / `🛡 Armor` → `Vida` / `Daño` / `Armor`
+  - Equipamiento y ubicación de mobs: eliminado `🎒` / `📍`
+  - Origen de items: eliminado `📍`
+  - Líneas de bloques libres: `fillTextWithEmoji` → `ctx.fillText` (el texto ya no tiene emojis)
+
+- **`src/utils/libreFields.js`** — campo `img` en `formatLibreForCanvas`: `🖼 ${shortUrl}` → `Imagen: ${shortUrl}`
+
+**Qué NO se tocó:**
+- Los embeds de Discord (texto en Discord sí renderiza emoji correctamente — no tiene el problema de fuentes)
+- La lógica de separación items/libres (`splitItems`, `parseLibreFields`) — ya funcionaba desde Sesión 6
+- `renderLogs.js`, `renderTierlist.js`, `renderWeapon.js` — no tenían el problema de cuadros en el screenshot reportado
+
+**Resultado esperado:** el canvas del `/screenshot logs ver:<log>` ya no muestra □. Los stats de mobs se leen como `Vida: 200  Daño: 40`, la meta row muestra la categoría y relevancia en texto, y los bloques libres muestran sus campos sin emojis pero con toda su información.
+
+**Pendiente:**
+- Si se quiere recuperar los emojis visuales (❤️ etc.) en el canvas, la solución robusta es copiar `NotoColorEmoji.ttf` al repo en `src/assets/fonts/` y registrarlo directamente en `fonts.js` como se hace con Liberation Sans. Eso garantiza que funcione sin depender de la estructura del paquete npm ni de las fuentes del sistema.
+
+**Problemas conocidos:**
+- La Capa 2 (fuentes del sistema) solo funciona si Railway tiene NotoColorEmoji instalado — esto varía según la imagen base del deploy. En la práctica Capa 1 debería resolverlo; si ambas fallan, el aviso en consola indica el fix manual.
+
+---
+
 # Sesión 6 — soporte real de emoji en screenshots de canvas
 
 Después de la prueba visual se confirmó que los cuadros vacíos no eran datos faltantes: `@napi-rs/canvas` estaba intentando dibujar emoji con `Liberation Sans`, una fuente sin glifos de emoji. En Linux/Railway tampoco había una fuente de emoji del sistema disponible como fallback.

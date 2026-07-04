@@ -250,7 +250,7 @@ export function formatLibreForCanvas(libre) {
     const shortUrl = libre.image_url.length > 60
       ? libre.image_url.slice(0, 58) + '…'
       : libre.image_url;
-    lines.push({ text: `🖼 ${shortUrl}`, style: 'img', indent: 0 });
+    lines.push({ text: `Imagen: ${shortUrl}`, style: 'img', indent: 0 });
   }
 
   return lines;
