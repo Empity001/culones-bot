@@ -4,7 +4,7 @@
 
 import { createCanvas } from '@napi-rs/canvas';
 import { ensureFonts, FONT } from './fonts.js';
-import { splitItems, formatLibreForCanvas, measureLibreHeight } from './libreFields.js';
+import { splitItems, formatLibreForCanvas, measureLibreHeight, measureLibreTitleHeight, formatEquipmentForCanvas, formatSourceForCanvas } from './libreFields.js';
 
 // ── Tokens de diseño (mismo sistema que los otros renderers) ─────────────────
 const BG_COLOR    = '#0c0a14';
@@ -296,7 +296,8 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
 
       // Equipamiento / ubicación
       const metaParts = [];
-      if (mob.equipment) metaParts.push(`🎒 ${mob.equipment}`);
+      const equipmentText = formatEquipmentForCanvas(mob.equipment);
+      if (equipmentText) metaParts.push(`🎒 ${equipmentText}`);
       if (mob.location)  metaParts.push(`📍 ${mob.location}`);
       if (metaParts.length) {
         ctx.fillStyle    = INK_400;
@@ -337,7 +338,8 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
       const metaParts = [];
       if (item.tier)          metaParts.push(`Rango: ${item.tier}`);
       if (item.item_type)     metaParts.push(item.item_type);
-      if (item.obtained_from) metaParts.push(`📍 ${item.obtained_from}`);
+      const sourceText = formatSourceForCanvas(item.obtained_from);
+      if (sourceText) metaParts.push(`📍 ${sourceText}`);
 
       if (metaParts.length) {
         ctx.fillStyle    = INK_400;
@@ -373,14 +375,19 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
       roundRect(ctx, PADDING, y, contentW, cardH, 8);
       ctx.stroke();
 
-      // Nombre del bloque libre como título de la card
+      // Nombre del bloque libre como título de la card.
+      // Ya no se trunca a una sola línea: algunos bloques legacy guardaban
+      // casi todo el contexto en el nombre, así que lo envolvemos completo.
       ctx.fillStyle    = INK_100;
       ctx.font         = `bold 13px ${FONT.sans}`;
       ctx.textAlign    = 'left';
       ctx.textBaseline = 'top';
-      ctx.fillText(truncate(libre.name, 38), PADDING + 12, y + 8);
+      const libreTitleLines = wrapText(ctx, libre.name || 'Bloque libre', contentW - 24);
+      for (let i = 0; i < libreTitleLines.length; i++) {
+        ctx.fillText(libreTitleLines[i], PADDING + 12, y + 8 + i * 16);
+      }
 
-      let innerY = y + 28;
+      let innerY = y + measureLibreTitleHeight(ctx, libre, contentW - 24, FONT.sans);
 
       if (canvasLines.length === 0) {
         ctx.fillStyle = INK_400;

@@ -141,3 +141,8 @@ sql/
 
 - **Comando**: crea `src/commands/micomando.js` exportando `data` y `execute` (y `autocomplete` si lo necesita) → corre `npm run deploy`. No hay que tocar `index.js`.
 - **Evento**: crea `src/events/mievento.js` exportando `name`, `once` y `execute` → se carga solo al reiniciar.
+
+
+## Nota QA screenshots
+
+El renderer de `/screenshot logs ver:<log>` también limpia valores legacy guardados como JSON en `equipment` de mobs y `obtained_from` de items normales, para evitar que Discord muestre arrays JSON crudos en la imagen.
