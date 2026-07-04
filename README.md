@@ -55,7 +55,7 @@ Lista o detalle de logs.
 
 - Sin opciones: genera una imagen con los 10 logs más recientes (título, categoría, relevancia, fecha).
 - **`cantidad`**: cuántos logs mostrar (máximo 20).
-- **`ver: <autocomplete del título>`** — en vez de la lista, genera una imagen con el contenido completo de ese log: título, descripción, mobs con sus stats (vida/daño/armor, equipamiento, ubicación) e items (rango, tipo, dónde se obtiene).
+- **`ver: <autocomplete del título>`** — en vez de la lista, genera una imagen con el contenido completo de ese log: título, descripción, mobs con sus stats (vida/daño/armor, equipamiento, ubicación), items normales (rango, tipo, dónde se obtiene) y bloques libres en su propia sección, parseados campo por campo sin mostrar `_libre` ni JSON crudo.
 - Opción `canal` (solo admins): envía la imagen a otro canal.
 
 ### 🏓 `/ping` — diagnóstico

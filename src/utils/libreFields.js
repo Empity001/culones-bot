@@ -13,10 +13,29 @@
  * @returns {Array<{key:string, value:string, subfields:Array}>}
  */
 export function parseLibreFields(item) {
-  if (!item?.obtained_from) return [];
+  const raw = item?.obtained_from;
+  if (!raw) return [];
+
   try {
-    const parsed = JSON.parse(item.obtained_from);
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed = Array.isArray(raw) ? raw : JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    // Normalización defensiva: si algún campo viene raro, lo dejamos
+    // en formato seguro para que ni embeds ni canvas exploten.
+    return parsed
+      .filter((field) => field && typeof field === 'object')
+      .map((field) => ({
+        key: field.key != null ? String(field.key) : '',
+        value: field.value != null ? String(field.value) : '',
+        subfields: Array.isArray(field.subfields)
+          ? field.subfields
+              .filter((sub) => sub && typeof sub === 'object')
+              .map((sub) => ({
+                key: sub.key != null ? String(sub.key) : '',
+                value: sub.value != null ? String(sub.value) : '',
+              }))
+          : [],
+      }));
   } catch {
     return [];
   }
@@ -63,14 +82,14 @@ export function formatLibreForCanvas(libre) {
 
     if (field.value) {
       lines.push({ text: `${field.key}:`, style: 'header', indent: 0 });
-      lines.push({ text: String(field.value), style: 'value', indent: 12 });
+      lines.push({ text: field.value, style: 'value', indent: 12 });
     } else {
       lines.push({ text: field.key, style: 'header', indent: 0 });
     }
 
     for (const sub of (field.subfields || [])) {
       if (!sub?.key) continue;
-      const subText = sub.value != null ? `↳ ${sub.key}: ${sub.value}` : `↳ ${sub.key}`;
+      const subText = sub.value ? `↳ ${sub.key}: ${sub.value}` : `↳ ${sub.key}`;
       lines.push({ text: subText, style: 'sub', indent: 20 });
     }
   }
@@ -103,16 +122,21 @@ export function formatLibreForCanvas(libre) {
  */
 export function measureLibreHeight(ctx, libre, maxWidth, fontSans) {
   const LINE_H = { header: 18, value: 17, sub: 16, desc: 17, img: 15 };
-  const PADDING_CARD = 16; // 8px top + 8px bottom
+  // Debe coincidir con renderLogDetail.js:
+  // - título del bloque en y + 8
+  // - contenido empieza en y + 28
+  // - margen inferior para que el texto no toque el borde de la card
+  const TITLE_AREA_H = 28;
+  const BOTTOM_PADDING = 10;
 
   const lines = formatLibreForCanvas(libre);
 
   if (lines.length === 0) {
-    // Bloque vacío: solo muestra "Sin campos." en 1 línea
-    return PADDING_CARD + 18;
+    // Bloque vacío: título + "Sin campos." + padding inferior
+    return TITLE_AREA_H + 18 + BOTTOM_PADDING;
   }
 
-  let h = PADDING_CARD;
+  let h = TITLE_AREA_H + BOTTOM_PADDING;
   for (const line of lines) {
     const effectiveWidth = maxWidth - line.indent;
     ctx.font = `${line.style === 'sub' ? 'italic ' : ''}11px ${fontSans}`;
