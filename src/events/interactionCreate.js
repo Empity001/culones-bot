@@ -8,7 +8,7 @@ export const name = Events.InteractionCreate;
 export const once = false;
 
 export async function execute(interaction) {
-  // ── Autocompletado (ej: /screenshot arma nombre:<escribiendo...>) ──────
+  // ── Autocompletado (ej: /screenshot guia nombre:<escribiendo...>) ───────
   if (interaction.isAutocomplete()) {
     const command = interaction.client.commands.get(interaction.commandName);
     if (!command || typeof command.autocomplete !== 'function') return;

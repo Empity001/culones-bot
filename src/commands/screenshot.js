@@ -2,8 +2,9 @@
 //
 // Subcomandos:
 //   /screenshot tierlist  columna:<weapon|subweapon|accessory|todas>  [canal]
-//   /screenshot armas     [filtro:<categoria|tipo>] [valor:<id>]      [canal]
-//   /screenshot arma      nombre:<autocomplete>                        [canal]
+//   /screenshot guias     [filtro:<categoria|tipo>] [valor:<id>]      [canal]
+//   /screenshot guia      nombre:<autocomplete>                        [canal]
+//   /screenshot kits                                                   [canal]
 //   /screenshot logs      [cantidad]                                   [canal]
 //   /screenshot logs      ver:<id del log>                             [canal]
 //
@@ -27,6 +28,8 @@ import { renderTierlistFullImage }           from '../utils/renderTierlistFull.j
 import { searchWeaponsByName, loadWeaponWithRanks, loadWeaponCatalog } from '../services/weapons.js';
 import { renderWeaponRankImage }             from '../utils/renderWeapon.js';
 import { renderWeaponCatalogImage }          from '../utils/renderWeaponCatalog.js';
+import { loadKits }                          from '../services/kits.js';
+import { renderKitsImage }                   from '../utils/renderKits.js';
 import { loadRecentLogs, loadLogById }       from '../services/logs.js';
 import { renderLogsImage }                   from '../utils/renderLogs.js';
 import { renderLogDetailImage }              from '../utils/renderLogDetail.js';
@@ -60,10 +63,10 @@ export const data = new SlashCommandBuilder()
       )
   )
 
-  // ── /screenshot armas ──────────────────────────────────────────────────────
+  // ── /screenshot guias ──────────────────────────────────────────────────────
   .addSubcommand((sub) =>
     sub
-      .setName('armas')
+      .setName('guias')
       .setDescription('Catálogo de la sección Guías (todas las publicadas, sin specs)')
       .addStringOption((o) =>
         o.setName('filtro')
@@ -88,10 +91,10 @@ export const data = new SlashCommandBuilder()
       )
   )
 
-  // ── /screenshot arma ───────────────────────────────────────────────────────
+  // ── /screenshot guia ───────────────────────────────────────────────────────
   .addSubcommand((sub) =>
     sub
-      .setName('arma')
+      .setName('guia')
       .setDescription('Ficha completa de una entrada de Guías (una imagen por rango)')
       .addStringOption((o) =>
         o.setName('nombre')
@@ -99,6 +102,19 @@ export const data = new SlashCommandBuilder()
           .setRequired(true)
           .setAutocomplete(true)
       )
+      .addChannelOption((o) =>
+        o.setName('canal')
+          .setDescription('Canal donde enviar (solo admins — por defecto: este canal)')
+          .addChannelTypes(ChannelType.GuildText)
+          .setRequired(false)
+      )
+  )
+
+  // ── /screenshot kits ───────────────────────────────────────────────────────
+  .addSubcommand((sub) =>
+    sub
+      .setName('kits')
+      .setDescription('Kits recomendados (Arma / Accesorio / Sub-arma)')
       .addChannelOption((o) =>
         o.setName('canal')
           .setDescription('Canal donde enviar (solo admins — por defecto: este canal)')
@@ -138,15 +154,15 @@ export async function autocomplete(interaction) {
   const sub     = interaction.options.getSubcommand();
   const focused = interaction.options.getFocused(true);
 
-  // /screenshot arma nombre:...
-  if (sub === 'arma' && focused.name === 'nombre') {
+  // /screenshot guia nombre:...
+  if (sub === 'guia' && focused.name === 'nombre') {
     const weapons = await searchWeaponsByName(focused.value);
     await interaction.respond(weapons.map((w) => ({ name: w.name.slice(0, 100), value: w.id })));
     return;
   }
 
-  // /screenshot armas valor:... (depende de filtro)
-  if (sub === 'armas' && focused.name === 'valor') {
+  // /screenshot guias valor:... (depende de filtro)
+  if (sub === 'guias' && focused.name === 'valor') {
     const tipoFiltro = interaction.options.getString('filtro');
     if (!tipoFiltro) { await interaction.respond([]); return; }
 
@@ -190,8 +206,9 @@ export async function execute(interaction) {
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'tierlist') return handleTierlist(interaction);
-  if (sub === 'armas')    return handleWeaponCatalog(interaction);
-  if (sub === 'arma')     return handleWeapon(interaction);
+  if (sub === 'guias')    return handleWeaponCatalog(interaction);
+  if (sub === 'guia')     return handleWeapon(interaction);
+  if (sub === 'kits')     return handleKits(interaction);
   if (sub === 'logs')     return handleLogs(interaction);
 }
 
@@ -278,7 +295,7 @@ async function handleTierlist(interaction) {
   }
 }
 
-// ── /screenshot armas ─────────────────────────────────────────────────────────
+// ── /screenshot guias ─────────────────────────────────────────────────────────
 async function handleWeaponCatalog(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
@@ -323,14 +340,14 @@ async function handleWeaponCatalog(interaction) {
     });
 
   } catch (err) {
-    console.error('[screenshot:armas]', err);
+    console.error('[screenshot:guias]', err);
     await interaction.editReply({
       embeds: [buildErrorEmbed(`Error generando el catálogo: ${err.message}`)],
     });
   }
 }
 
-// ── /screenshot arma ──────────────────────────────────────────────────────────
+// ── /screenshot guia ───────────────────────────────────────────────────────────
 async function handleWeapon(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
@@ -374,7 +391,40 @@ async function handleWeapon(interaction) {
     });
 
   } catch (err) {
-    console.error('[screenshot:arma]', err);
+    console.error('[screenshot:guia]', err);
+    await interaction.editReply({
+      embeds: [buildErrorEmbed(`Error generando la imagen: ${err.message}`)],
+    });
+  }
+}
+
+// ── /screenshot kits ───────────────────────────────────────────────────────────
+async function handleKits(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetChannel = resolveTargetChannel(interaction);
+
+  if (!(await checkChannelPerms(interaction, targetChannel))) return;
+
+  try {
+    const kits = await loadKits();
+
+    const pngBuffer  = await renderKitsImage(kits, interaction.guild.name);
+    const attachment = new AttachmentBuilder(pngBuffer, { name: `kits-${Date.now()}.png` });
+
+    await targetChannel.send({
+      content: `🎒 **KITS RECOMENDADOS** (${kits.length} kit${kits.length !== 1 ? 's' : ''})`,
+      files:   [attachment],
+    });
+    await interaction.editReply({
+      embeds: [buildSuccessEmbed(
+        'Imagen enviada',
+        `Los kits recomendados (${kits.length}) fueron enviados a ${targetChannel}. 🖼️`,
+      )],
+    });
+
+  } catch (err) {
+    console.error('[screenshot:kits]', err);
     await interaction.editReply({
       embeds: [buildErrorEmbed(`Error generando la imagen: ${err.message}`)],
     });
