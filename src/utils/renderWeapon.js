@@ -128,8 +128,9 @@ function estimateHeight(rank) {
     // Cada método puede tener materiales/grid de distinto tamaño
     let recipeH = 26; // header
     for (const method of recipeMethods) {
-      if (method.title) recipeH += 18;
-      recipeH += 56 + 24; // slot row + gap
+      if (method.title || getRecipeLabel(method)) recipeH += 16;
+      const layout = getRecipeBoxLayout(method);
+      recipeH += Math.max(layout.height, CELL) + 14 /* nombre resultado */ + 20 /* margen */;
     }
     h += recipeH;
   }
@@ -169,6 +170,46 @@ function getRecipeLabel(method) {
   }
   if (mode === 'smithing') return 'Mesa de herrería';
   return null; // trade: sin label de modo
+}
+
+// Igual que la web (weapons.css): cada modo tiene su propia disposición de
+// slots dentro de una "caja" tipo mesa de crafteo, no una fila continua.
+//   - crafting: grid 3x3 (9 slots)
+//   - furnace:  columna vertical (slot, llama, slot) — 2 slots
+//   - smithing: fila de 3 slots
+//   - trade:    fila libre, sin caja (comportamiento anterior)
+const CELL = 48;
+const CELL_GAP = 4;
+const BOX_PAD = 10;
+const FLAME_SIZE = 22;
+
+function getRecipeBoxLayout(method) {
+  const mode = method.mode || 'trade';
+  if (mode === 'crafting') {
+    const cols = 3, rows = 3;
+    return {
+      mode, cols, rows,
+      width:  cols * CELL + (cols - 1) * CELL_GAP + BOX_PAD * 2,
+      height: rows * CELL + (rows - 1) * CELL_GAP + BOX_PAD * 2,
+    };
+  }
+  if (mode === 'smithing') {
+    const cols = 3, rows = 1;
+    return {
+      mode, cols, rows,
+      width:  cols * CELL + (cols - 1) * CELL_GAP + BOX_PAD * 2,
+      height: rows * CELL + BOX_PAD * 2,
+    };
+  }
+  if (mode === 'furnace') {
+    return {
+      mode,
+      width:  CELL + BOX_PAD * 2,
+      height: CELL + CELL_GAP + FLAME_SIZE + CELL_GAP + CELL + BOX_PAD * 2,
+    };
+  }
+  // trade: sin caja, fila libre de slots
+  return { mode, width: null, height: CELL };
 }
 
 export async function renderWeaponRankImage({ weapon, category, type, rank }) {
@@ -438,7 +479,37 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
     ctx.fillText('MEJORA/FABRICACIÓN', PADDING, y);
     y += 26;
 
-    const slotSize = 52;
+    const RESULT_SIZE = 52;
+
+    // Dibuja un slot individual (fondo + imagen + cantidad), reutilizado
+    // tanto dentro de la caja tipo mesa de crafteo como en el resultado.
+    const drawSlotCell = (x, sy, size, slot, img, { isResult = false, showQty = true } = {}) => {
+      ctx.fillStyle = isResult ? 'rgba(243,183,58,0.12)' : 'rgba(255,255,255,0.05)';
+      roundRect(ctx, x, sy, size, size, 6);
+      ctx.fill();
+      if (isResult) {
+        ctx.strokeStyle = GOLD;
+        ctx.lineWidth   = 1;
+        roundRect(ctx, x, sy, size, size, 6);
+        ctx.stroke();
+      }
+      if (img) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.save();
+        roundRect(ctx, x, sy, size, size, 6);
+        ctx.clip();
+        ctx.drawImage(img, x, sy, size, size);
+        ctx.restore();
+      }
+      const qty = slot?.qty ?? slot?.count ?? 1;
+      if (showQty && qty > 1) {
+        ctx.fillStyle    = INK_100;
+        ctx.font         = `bold 9px ${FONT.sans}`;
+        ctx.textAlign    = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`x${qty}`, x + size - 3, sy + size - 3);
+      }
+    };
 
     for (const { method, slots, slotImages, resultImg } of methodImageData) {
       const modeLabel = getRecipeLabel(method);
@@ -451,42 +522,68 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
         y += 16;
       }
 
-      const slotY = y;
-      let mx = PADDING;
+      const slotY  = y;
+      const layout = getRecipeBoxLayout(method);
+      const blockH = Math.max(layout.height, RESULT_SIZE);
+      let mx;
 
-      for (let i = 0; i < slots.length; i++) {
-        const slot = slots[i] || {};
-        const img  = slotImages[i];
-
-        ctx.fillStyle = 'rgba(255,255,255,0.05)';
-        roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
+      if (layout.mode === 'crafting' || layout.mode === 'smithing') {
+        // Caja gris tipo mesa de crafteo/herrería con grid interno
+        ctx.fillStyle   = '#8b889a';
+        roundRect(ctx, PADDING, slotY, layout.width, layout.height, 6);
         ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.lineWidth   = 1;
+        roundRect(ctx, PADDING, slotY, layout.width, layout.height, 6);
+        ctx.stroke();
 
-        if (img) {
-          ctx.imageSmoothingEnabled = false;
-          ctx.save();
-          roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
-          ctx.clip();
-          ctx.drawImage(img, mx, slotY, slotSize, slotSize);
-          ctx.restore();
+        for (let i = 0; i < layout.cols * layout.rows; i++) {
+          const col = i % layout.cols;
+          const row = Math.floor(i / layout.cols);
+          const cx  = PADDING + BOX_PAD + col * (CELL + CELL_GAP);
+          const cy  = slotY + BOX_PAD + row * (CELL + CELL_GAP);
+          drawSlotCell(cx, cy, CELL, slots[i], slotImages[i]);
         }
+        mx = PADDING + layout.width + 16;
+      } else if (layout.mode === 'furnace') {
+        // Caja gris vertical: slot arriba, llama, slot abajo
+        ctx.fillStyle   = '#8b889a';
+        roundRect(ctx, PADDING, slotY, layout.width, layout.height, 6);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.lineWidth   = 1;
+        roundRect(ctx, PADDING, slotY, layout.width, layout.height, 6);
+        ctx.stroke();
 
-        const qty = slot.qty ?? slot.count ?? 1;
-        if (qty > 1) {
-          ctx.fillStyle    = INK_100;
-          ctx.font         = `bold 9px ${FONT.sans}`;
-          ctx.textAlign    = 'right';
-          ctx.textBaseline = 'bottom';
-          ctx.fillText(`x${qty}`, mx + slotSize - 3, slotY + slotSize - 3);
-        }
+        const cx = PADDING + BOX_PAD;
+        const topY = slotY + BOX_PAD;
+        drawSlotCell(cx, topY, CELL, slots[0], slotImages[0]);
 
+        const flameY = topY + CELL + CELL_GAP;
+        ctx.font         = `${FLAME_SIZE}px ${FONT.sans}`;
         ctx.textAlign    = 'center';
-        ctx.font         = `9px ${FONT.sans}`;
-        ctx.fillStyle    = INK_400;
-        ctx.textBaseline = 'top';
-        ctx.fillText(truncate(slot.name || '', 10), mx + slotSize / 2, slotY + slotSize + 3);
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🔥', cx + CELL / 2, flameY + FLAME_SIZE / 2);
 
-        mx += slotSize + 8;
+        const bottomY = flameY + FLAME_SIZE + CELL_GAP;
+        drawSlotCell(cx, bottomY, CELL, slots[1], slotImages[1]);
+
+        mx = PADDING + layout.width + 16;
+      } else {
+        // trade: fila libre de slots, sin caja, con nombre debajo de cada uno
+        mx = PADDING;
+        for (let i = 0; i < slots.length; i++) {
+          const slot = slots[i] || {};
+          drawSlotCell(mx, slotY, RESULT_SIZE, slot, slotImages[i]);
+
+          ctx.textAlign    = 'center';
+          ctx.font         = `9px ${FONT.sans}`;
+          ctx.fillStyle    = INK_400;
+          ctx.textBaseline = 'top';
+          ctx.fillText(truncate(slot.name || '', 10), mx + RESULT_SIZE / 2, slotY + RESULT_SIZE + 3);
+
+          mx += RESULT_SIZE + 8;
+        }
       }
 
       // Flecha
@@ -494,36 +591,22 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
       ctx.font         = `bold 18px ${FONT.sans}`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('→', mx + 10, slotY + slotSize / 2);
+      ctx.fillText('→', mx + 10, slotY + blockH / 2);
       mx += 26;
 
-      // Resultado
-      const result = method.result || {};
-      ctx.fillStyle = 'rgba(243,183,58,0.12)';
-      roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
-      ctx.fill();
-      ctx.strokeStyle = GOLD;
-      ctx.lineWidth   = 1;
-      roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
-      ctx.stroke();
-
-      if (resultImg) {
-        ctx.imageSmoothingEnabled = false;
-        ctx.save();
-        roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
-        ctx.clip();
-        ctx.drawImage(resultImg, mx, slotY, slotSize, slotSize);
-        ctx.restore();
-      }
+      // Resultado (centrado verticalmente respecto a la caja/fila)
+      const result   = method.result || {};
+      const resultY  = slotY + (blockH - RESULT_SIZE) / 2;
+      drawSlotCell(mx, resultY, RESULT_SIZE, result, resultImg, { isResult: true, showQty: false });
 
       ctx.fillStyle    = GOLD;
       ctx.textAlign    = 'center';
       ctx.font         = `9px ${FONT.sans}`;
       ctx.textBaseline = 'top';
-      ctx.fillText(truncate(result.name || '', 10), mx + slotSize / 2, slotY + slotSize + 3);
+      ctx.fillText(truncate(result.name || '', 10), mx + RESULT_SIZE / 2, resultY + RESULT_SIZE + 3);
       ctx.textAlign = 'left';
 
-      y = slotY + slotSize + 20;
+      y = Math.max(slotY + blockH, resultY + RESULT_SIZE + 14) + 20;
     }
   }
 
