@@ -70,6 +70,26 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+// Ícono de llama dibujado a mano (curvas de canvas), no con el emoji 🔥.
+// Así se ve igual siempre, tenga o no el entorno una fuente de emoji
+// instalada (ver la estrategia de 3 capas documentada en fonts.js).
+function drawFlameIcon(ctx, cx, cy, size) {
+  const drawTeardrop = (scale, color) => {
+    const w = size * 0.5 * scale;
+    const h = size * scale;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + h / 2);
+    ctx.quadraticCurveTo(cx - w / 2, cy + h / 6, cx - w / 4, cy - h / 3);
+    ctx.quadraticCurveTo(cx, cy - h / 2 - h * 0.08, cx + w / 4, cy - h / 3);
+    ctx.quadraticCurveTo(cx + w / 2, cy + h / 6, cx, cy + h / 2);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
+  drawTeardrop(1, '#ff6a2d');
+  drawTeardrop(0.55, '#ffd23d');
+}
+
 function wrapText(ctx, text, maxWidth) {
   if (!text) return [];
   const words = text.split(/\s+/);
@@ -560,10 +580,7 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
         drawSlotCell(cx, topY, CELL, slots[0], slotImages[0]);
 
         const flameY = topY + CELL + CELL_GAP;
-        ctx.font         = `${FLAME_SIZE}px ${FONT.sans}`;
-        ctx.textAlign    = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('🔥', cx + CELL / 2, flameY + FLAME_SIZE / 2);
+        drawFlameIcon(ctx, cx + CELL / 2, flameY + FLAME_SIZE / 2, FLAME_SIZE);
 
         const bottomY = flameY + FLAME_SIZE + CELL_GAP;
         drawSlotCell(cx, bottomY, CELL, slots[1], slotImages[1]);
