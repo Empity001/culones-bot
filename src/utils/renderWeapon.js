@@ -122,10 +122,53 @@ function estimateHeight(rank) {
     h += 6;
   }
 
-  if (rank.upgrade_recipe) h += 26 + 56 + 24;
+  if (rank.upgrade_recipe) {
+    // Soporte para el nuevo formato multi-método: {methods:[...]} o método directo
+    const recipeMethods = getRecipeMethods(rank.upgrade_recipe);
+    // Cada método puede tener materiales/grid de distinto tamaño
+    let recipeH = 26; // header
+    for (const method of recipeMethods) {
+      if (method.title) recipeH += 18;
+      recipeH += 56 + 24; // slot row + gap
+    }
+    h += recipeH;
+  }
 
   h += PADDING + 30;
   return Math.max(Math.round(h), 280);
+}
+
+// ── Helpers de receta ────────────────────────────────────────────────────────
+// La web evolucionó de una receta plana {materials, result} a un sistema
+// con múltiples métodos y modos: trade/crafting/furnace/smithing.
+// getRecipeMethods normaliza ambos formatos para que el renderer siempre
+// reciba un array de métodos, independientemente de cuán vieja sea la data.
+
+function getRecipeMethods(recipe) {
+  if (!recipe) return [];
+  // Nuevo formato: { methods: [...] }
+  if (Array.isArray(recipe.methods) && recipe.methods.length > 0) return recipe.methods;
+  // Formato legacy / directo: el objeto raíz ES el único método
+  return [recipe];
+}
+
+function getRecipeSlots(method) {
+  const mode = method.mode || 'trade';
+  if (mode === 'crafting') return Array.isArray(method.grid) ? method.grid : [];
+  if (mode === 'furnace' || mode === 'smithing') return Array.isArray(method.inputs) ? method.inputs : [];
+  // trade: materials
+  return Array.isArray(method.materials) ? method.materials : [];
+}
+
+function getRecipeLabel(method) {
+  const mode = method.mode || 'trade';
+  if (mode === 'crafting') return 'Mesa de crafteo';
+  if (mode === 'furnace') {
+    const labels = { blast_furnace: 'Alto horno', smoker: 'Ahumador' };
+    return labels[method.furnace_type] || 'Horno';
+  }
+  if (mode === 'smithing') return 'Mesa de herrería';
+  return null; // trade: sin label de modo
 }
 
 export async function renderWeaponRankImage({ weapon, category, type, rank }) {
@@ -135,13 +178,15 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
   const headerImg    = await fetchImage(safeImageUrl);
 
   const recipe       = rank.upgrade_recipe;
-  const materials    = recipe && Array.isArray(recipe.materials) ? recipe.materials : [];
-  let materialImages = [];
-  let resultImg      = null;
-  if (recipe) {
-    materialImages = await Promise.all(materials.map(m => fetchImage(m.image_url)));
-    resultImg      = await fetchImage(recipe.result?.image_url);
-  }
+  const recipeMethods = getRecipeMethods(recipe);
+
+  // Pre-cargar todas las imágenes de todos los métodos de receta
+  const methodImageData = await Promise.all(recipeMethods.map(async (method) => {
+    const slots = getRecipeSlots(method);
+    const slotImages = await Promise.all(slots.map(s => fetchImage(s?.image_url)));
+    const resultImg = await fetchImage(method.result?.image_url);
+    return { method, slots, slotImages, resultImg };
+  }));
 
   const totalH = estimateHeight(rank);
   const canvas  = createCanvas(CANVAS_W, totalH);
@@ -384,86 +429,102 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
     y += 6;
   }
 
-  // ── Receta de mejora ──────────────────────────────────────────────────────
-  if (recipe) {
+  // ── Mejora/fabricación ────────────────────────────────────────────────────
+  if (recipe && recipeMethods.length > 0) {
     ctx.fillStyle    = CYAN;
     ctx.font         = `bold 13px ${FONT.sans}`;
     ctx.textAlign    = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillText('MEJORA', PADDING, y);
+    ctx.fillText('MEJORA/FABRICACIÓN', PADDING, y);
     y += 26;
 
-    const slotSize = 56;
-    let mx         = PADDING;
-    const slotY    = y;
+    const slotSize = 52;
 
-    for (let i = 0; i < materials.length; i++) {
-      const m   = materials[i];
-      const img = materialImages[i];
+    for (const { method, slots, slotImages, resultImg } of methodImageData) {
+      const modeLabel = getRecipeLabel(method);
+      if (method.title || modeLabel) {
+        ctx.fillStyle    = INK_400;
+        ctx.font         = `10px ${FONT.sans}`;
+        ctx.textBaseline = 'top';
+        ctx.textAlign    = 'left';
+        ctx.fillText(method.title || modeLabel || '', PADDING, y);
+        y += 16;
+      }
 
-      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      const slotY = y;
+      let mx = PADDING;
+
+      for (let i = 0; i < slots.length; i++) {
+        const slot = slots[i] || {};
+        const img  = slotImages[i];
+
+        ctx.fillStyle = 'rgba(255,255,255,0.05)';
+        roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
+        ctx.fill();
+
+        if (img) {
+          ctx.imageSmoothingEnabled = false;
+          ctx.save();
+          roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
+          ctx.clip();
+          ctx.drawImage(img, mx, slotY, slotSize, slotSize);
+          ctx.restore();
+        }
+
+        const qty = slot.qty ?? slot.count ?? 1;
+        if (qty > 1) {
+          ctx.fillStyle    = INK_100;
+          ctx.font         = `bold 9px ${FONT.sans}`;
+          ctx.textAlign    = 'right';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(`x${qty}`, mx + slotSize - 3, slotY + slotSize - 3);
+        }
+
+        ctx.textAlign    = 'center';
+        ctx.font         = `9px ${FONT.sans}`;
+        ctx.fillStyle    = INK_400;
+        ctx.textBaseline = 'top';
+        ctx.fillText(truncate(slot.name || '', 10), mx + slotSize / 2, slotY + slotSize + 3);
+
+        mx += slotSize + 8;
+      }
+
+      // Flecha
+      ctx.fillStyle    = INK_400;
+      ctx.font         = `bold 18px ${FONT.sans}`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('→', mx + 10, slotY + slotSize / 2);
+      mx += 26;
+
+      // Resultado
+      const result = method.result || {};
+      ctx.fillStyle = 'rgba(243,183,58,0.12)';
       roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
       ctx.fill();
+      ctx.strokeStyle = GOLD;
+      ctx.lineWidth   = 1;
+      roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
+      ctx.stroke();
 
-      if (img) {
+      if (resultImg) {
         ctx.imageSmoothingEnabled = false;
         ctx.save();
         roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
         ctx.clip();
-        ctx.drawImage(img, mx, slotY, slotSize, slotSize);
+        ctx.drawImage(resultImg, mx, slotY, slotSize, slotSize);
         ctx.restore();
       }
 
-      ctx.fillStyle    = INK_100;
-      ctx.font         = `bold 10px ${FONT.sans}`;
-      ctx.textAlign    = 'right';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(`x${m.qty ?? 1}`, mx + slotSize - 3, slotY + slotSize - 3);
-
+      ctx.fillStyle    = GOLD;
       ctx.textAlign    = 'center';
       ctx.font         = `9px ${FONT.sans}`;
-      ctx.fillStyle    = INK_400;
       ctx.textBaseline = 'top';
-      ctx.fillText(truncate(m.name || '', 10), mx + slotSize / 2, slotY + slotSize + 4);
+      ctx.fillText(truncate(result.name || '', 10), mx + slotSize / 2, slotY + slotSize + 3);
+      ctx.textAlign = 'left';
 
-      mx += slotSize + 10;
+      y = slotY + slotSize + 20;
     }
-
-    // Flecha
-    ctx.fillStyle    = INK_400;
-    ctx.font         = `bold 20px ${FONT.sans}`;
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('→', mx + 12, slotY + slotSize / 2);
-    mx += 30;
-
-    // Resultado
-    const result = recipe.result || {};
-    ctx.fillStyle = 'rgba(243,183,58,0.12)';
-    roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
-    ctx.fill();
-    ctx.strokeStyle = GOLD;
-    ctx.lineWidth   = 1;
-    roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
-    ctx.stroke();
-
-    if (resultImg) {
-      ctx.imageSmoothingEnabled = false;
-      ctx.save();
-      roundRect(ctx, mx, slotY, slotSize, slotSize, 6);
-      ctx.clip();
-      ctx.drawImage(resultImg, mx, slotY, slotSize, slotSize);
-      ctx.restore();
-    }
-
-    ctx.fillStyle    = GOLD;
-    ctx.textAlign    = 'center';
-    ctx.font         = `9px ${FONT.sans}`;
-    ctx.textBaseline = 'top';
-    ctx.fillText(truncate(result.name || '', 10), mx + slotSize / 2, slotY + slotSize + 4);
-    ctx.textAlign = 'left';
-
-    y = slotY + slotSize + 24;
   }
 
   // ── Footer ────────────────────────────────────────────────────────────────
@@ -479,7 +540,7 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
   ctx.textAlign    = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText(
-    `Culones RPG · Guia de Armas · ${new Date().toLocaleDateString('es-ES')}`,
+    `Culones RPG · Guías · ${new Date().toLocaleDateString('es-ES')}`,
     PADDING,
     totalH - 15
   );

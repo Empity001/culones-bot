@@ -64,7 +64,7 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub
       .setName('armas')
-      .setDescription('Catálogo de todas las armas publicadas (sin specs)')
+      .setDescription('Catálogo de la sección Guías (todas las publicadas, sin specs)')
       .addStringOption((o) =>
         o.setName('filtro')
           .setDescription('Filtrar por categoría o tipo')
@@ -92,7 +92,7 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub
       .setName('arma')
-      .setDescription('Ficha completa de un arma (una imagen por rango)')
+      .setDescription('Ficha completa de una entrada de Guías (una imagen por rango)')
       .addStringOption((o) =>
         o.setName('nombre')
           .setDescription('Nombre del arma')
@@ -312,13 +312,13 @@ async function handleWeaponCatalog(interaction) {
     const attachment = new AttachmentBuilder(pngBuffer, { name: `armas-catalogo-${Date.now()}.png` });
 
     await targetChannel.send({
-      content: `⚔️ **CATÁLOGO DE ARMAS** · ${filterLabel} (${weapons.length} arma${weapons.length !== 1 ? 's' : ''})`,
+      content: `⚔️ **GUÍAS · CATÁLOGO** · ${filterLabel} (${weapons.length} arma${weapons.length !== 1 ? 's' : ''})`,
       files:   [attachment],
     });
     await interaction.editReply({
       embeds: [buildSuccessEmbed(
         'Imagen enviada',
-        `El catálogo de armas (${filterLabel}, ${weapons.length} arma${weapons.length !== 1 ? 's' : ''}) fue enviado a ${targetChannel}. 🖼️`,
+        `El catálogo de Guías (${filterLabel}, ${weapons.length} arma${weapons.length !== 1 ? 's' : ''}) fue enviado a ${targetChannel}. 🖼️`,
       )],
     });
 
@@ -363,7 +363,7 @@ async function handleWeapon(interaction) {
     }
 
     await targetChannel.send({
-      content: `⚔️ **${weapon.name.toUpperCase()}** · ${ranks.length} rango${ranks.length > 1 ? 's' : ''}`,
+      content: `⚔️ **GUÍAS · ${weapon.name.toUpperCase()}** · ${ranks.length} rango${ranks.length > 1 ? 's' : ''}`,
       files:   attachments,
     });
     await interaction.editReply({

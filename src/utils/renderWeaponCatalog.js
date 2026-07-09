@@ -256,7 +256,7 @@ export async function renderWeaponCatalogImage(weapons, filterLabel = 'Todas', s
   ctx.font         = `10px ${FONT.sans}`;
   ctx.textAlign    = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText(`${serverName} · Guía de Armas · ${new Date().toLocaleDateString('es-ES')}`, PADDING, footerY + 15);
+  ctx.fillText(`${serverName} · Guías · ${new Date().toLocaleDateString('es-ES')}`, PADDING, footerY + 15);
 
   ctx.fillStyle = CYAN;
   ctx.textAlign = 'right';
