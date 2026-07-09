@@ -30,6 +30,46 @@ const CATEGORY_EMOJI = {
 
 // Límite real de Discord por valor de campo de embed.
 const EMBED_FIELD_VALUE_LIMIT = 1024;
+const EMBED_DESCRIPTION_LIMIT = 4096;
+const EMBED_FIELD_SAFE_LIMIT = 950;
+const EMBED_DESCRIPTION_SAFE_LIMIT = 3600;
+const EMBED_TITLE_SAFE_LIMIT = 240;
+const EMBED_FIELD_NAME_SAFE_LIMIT = 220;
+
+function truncateText(value, maxLength, suffix = '...') {
+  const text = String(value || '').trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - suffix.length)).trimEnd()}${suffix}`;
+}
+
+function compactLines(lines, maxLength = EMBED_FIELD_SAFE_LIMIT) {
+  const safeLines = (lines || []).map(line => String(line || '').trim()).filter(Boolean);
+  const selected = [];
+  let length = 0;
+
+  for (const line of safeLines) {
+    const nextLength = length + line.length + (selected.length ? 1 : 0);
+    if (!selected.length && line.length > maxLength) {
+      selected.push(truncateText(line, maxLength));
+      length = selected[0].length;
+      break;
+    }
+    if (nextLength > maxLength) break;
+    selected.push(line);
+    length = nextLength;
+  }
+
+  const remaining = safeLines.length - selected.length;
+  if (remaining > 0) {
+    const footer = `+${remaining} elemento(s) mas - consulta la web para ver el log completo.`;
+    while (selected.length && `${selected.join('\n')}\n${footer}`.length > EMBED_FIELD_VALUE_LIMIT) {
+      selected.pop();
+    }
+    selected.push(footer);
+  }
+
+  return selected.join('\n') || '_Sin datos._';
+}
 
 /**
  * Arma el texto completo (sin resumir) de un bloque libre para el embed.
@@ -82,8 +122,8 @@ export function buildLogEmbed(log, category, mobs = [], items = [], siteUrl = ''
 
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle(`${catEmoji} ${log.title}`)
-    .setDescription(log.description || 'Sin descripción.')
+    .setTitle(truncateText(`${catEmoji} ${log.title}`, EMBED_TITLE_SAFE_LIMIT))
+    .setDescription(truncateText(log.description || 'Sin descripcion.', EMBED_DESCRIPTION_SAFE_LIMIT))
     .addFields(
       {
         name: '📂 Categoría',
@@ -116,7 +156,7 @@ export function buildLogEmbed(log, category, mobs = [], items = [], siteUrl = ''
     });
     embed.addFields({
       name: `👾 Mobs (${mobs.length})`,
-      value: mobLines.join('\n'),
+      value: compactLines(mobLines),
       inline: false,
     });
   }
@@ -132,7 +172,7 @@ export function buildLogEmbed(log, category, mobs = [], items = [], siteUrl = ''
     });
     embed.addFields({
       name: `🗡️ Items (${normalItems.length})`,
-      value: itemLines.join('\n'),
+      value: compactLines(itemLines),
       inline: false,
     });
   }
@@ -143,18 +183,26 @@ export function buildLogEmbed(log, category, mobs = [], items = [], siteUrl = ''
   // Se limita la cantidad de campos por seguridad: Discord permite
   // un máximo de 25 campos por embed (3 fijos + mobs + items ya
   // ocupan hasta 5, así que dejamos margen de sobra).
-  const MAX_LIBRE_FIELDS = 19;
+  const MAX_LIBRE_FIELDS = 8;
   libres.slice(0, MAX_LIBRE_FIELDS).forEach((libre) => {
     embed.addFields({
-      name: `📋 ${libre.name}`,
-      value: formatLibreBlockValue(libre),
+      name: truncateText(`📋 ${libre.name}`, EMBED_FIELD_NAME_SAFE_LIMIT),
+      value: truncateText(formatLibreBlockValue(libre), EMBED_FIELD_SAFE_LIMIT),
       inline: false,
     });
   });
   if (libres.length > MAX_LIBRE_FIELDS) {
     embed.addFields({
-      name: '📋 …',
-      value: `+${libres.length - MAX_LIBRE_FIELDS} bloque(s) libre(s) más — consulta la web para verlos todos.`,
+      name: '📋 ...',
+      value: `+${libres.length - MAX_LIBRE_FIELDS} bloque(s) libre(s) mas - consulta la web para verlos todos.`,
+      inline: false,
+    });
+  }
+
+  if ((log.description || '').length > EMBED_DESCRIPTION_LIMIT) {
+    embed.addFields({
+      name: 'Nota',
+      value: 'La descripcion del log es muy extensa; este anuncio muestra un resumen seguro para Discord.',
       inline: false,
     });
   }
