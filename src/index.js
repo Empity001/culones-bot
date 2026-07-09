@@ -17,7 +17,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    // Solo los intents mínimos necesarios — el bot no necesita leer mensajes
+    GatewayIntentBits.GuildMessages,      // necesario para fetch y edit de mensajes en hilos
+    GatewayIntentBits.MessageContent,     // necesario para leer contenido de mensajes del bot
   ],
 });
 

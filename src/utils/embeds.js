@@ -236,3 +236,11 @@ export function buildErrorEmbed(description) {
     .setDescription(description)
     .setTimestamp();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Re-exports de logEmbeds.js para compatibilidad con código existente.
+// Si algún comando o util importaba buildLogEmbed directamente,
+// puede seguir funcionando — aunque el flujo principal ya usa
+// buildLogSummaryEmbed + buildLogPageEmbeds de logEmbeds.js.
+// ─────────────────────────────────────────────────────────────────────────────
+export { buildLogSummaryEmbed, buildLogPageEmbeds } from './logEmbeds.js';
