@@ -503,12 +503,20 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
 
     // Dibuja un slot individual (fondo + imagen + cantidad), reutilizado
     // tanto dentro de la caja tipo mesa de crafteo como en el resultado.
-    const drawSlotCell = (x, sy, size, slot, img, { isResult = false, showQty = true } = {}) => {
-      ctx.fillStyle = isResult ? 'rgba(243,183,58,0.12)' : 'rgba(255,255,255,0.05)';
+    // emptyBg es configurable porque el mismo slot se usa sobre fondos muy
+    // distintos: el embed oscuro (trade) vs. la caja gris clara del grid
+    // (crafting/furnace/smithing), donde un blanco al 5% casi no se nota.
+    const drawSlotCell = (x, sy, size, slot, img, { isResult = false, showQty = true, emptyBg = 'rgba(255,255,255,0.05)' } = {}) => {
+      ctx.fillStyle = isResult ? 'rgba(243,183,58,0.12)' : emptyBg;
       roundRect(ctx, x, sy, size, size, 6);
       ctx.fill();
       if (isResult) {
         ctx.strokeStyle = GOLD;
+        ctx.lineWidth   = 1;
+        roundRect(ctx, x, sy, size, size, 6);
+        ctx.stroke();
+      } else if (!img) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
         ctx.lineWidth   = 1;
         roundRect(ctx, x, sy, size, size, 6);
         ctx.stroke();
@@ -562,7 +570,7 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
           const row = Math.floor(i / layout.cols);
           const cx  = PADDING + BOX_PAD + col * (CELL + CELL_GAP);
           const cy  = slotY + BOX_PAD + row * (CELL + CELL_GAP);
-          drawSlotCell(cx, cy, CELL, slots[i], slotImages[i]);
+          drawSlotCell(cx, cy, CELL, slots[i], slotImages[i], { emptyBg: 'rgba(0,0,0,0.18)' });
         }
         mx = PADDING + layout.width + 16;
       } else if (layout.mode === 'furnace') {
@@ -577,13 +585,13 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
 
         const cx = PADDING + BOX_PAD;
         const topY = slotY + BOX_PAD;
-        drawSlotCell(cx, topY, CELL, slots[0], slotImages[0]);
+        drawSlotCell(cx, topY, CELL, slots[0], slotImages[0], { emptyBg: 'rgba(0,0,0,0.18)' });
 
         const flameY = topY + CELL + CELL_GAP;
         drawFlameIcon(ctx, cx + CELL / 2, flameY + FLAME_SIZE / 2, FLAME_SIZE);
 
         const bottomY = flameY + FLAME_SIZE + CELL_GAP;
-        drawSlotCell(cx, bottomY, CELL, slots[1], slotImages[1]);
+        drawSlotCell(cx, bottomY, CELL, slots[1], slotImages[1], { emptyBg: 'rgba(0,0,0,0.18)' });
 
         mx = PADDING + layout.width + 16;
       } else {
