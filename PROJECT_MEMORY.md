@@ -1,302 +1,661 @@
-# PROJECT_MEMORY — culones-bot
-
-Registro de sesiones de desarrollo del bot de Discord. Cada entrada resume qué se hizo, qué quedó pendiente y qué problemas se conocen pero no se resolvieron todavía.
-
----
-
-# Sesión 9 — /screenshot: resultado público, sin confirmación privada
-
-**Archivos modificados:** `src/commands/screenshot.js` (único archivo tocado).
-
-**Motivo:** todos los subcomandos de `/screenshot` (`tierlist`, `guias`, `guia`, `kits`, `logs`) ya enviaban la imagen como mensaje normal del canal (`targetChannel.send(...)`, público desde siempre). Lo que sí era privado era la confirmación posterior (`interaction.editReply` con `buildSuccessEmbed('Imagen enviada', ...)`), visible solo para quien ejecutó el comando ("Only you can see this"). Se quería que el único resultado visible fuera el mensaje público, con un anuncio de quién lo pidió.
-
-**Cambios:**
-- **Anuncio público de quién pidió el contenido**: nueva función local `requestAnnouncement(interaction, description)` → devuelve `> ${interaction.user} solicitó ${description}.`. Se antepone (con `\n`) al `content` que ya se mandaba en cada `targetChannel.send(...)`, en el **mismo mensaje** que la imagen — nunca como mensaje aparte. Esto es automático para los casos con varias imágenes en un solo `send` (p. ej. `/screenshot guia` manda un rango por adjunto pero todos en un solo mensaje): el anuncio no se repite porque solo hay un `send` por subcomando, como ya era el caso antes de este cambio.
-- **Se eliminó la confirmación ephemeral de éxito**: los 7 `await interaction.editReply({ embeds: [buildSuccessEmbed(...)] })` que confirmaban el envío se reemplazaron por `await interaction.deleteReply().catch(() => {})`. El `.catch(() => {})` es defensivo (mismo patrón que ya usa `interactionCreate.js` para follow-ups): si el borrado del placeholder ephemeral fallara por lo que sea, no se debe reportar un error al usuario cuando el contenido público ya se envió correctamente.
-- **`buildSuccessEmbed` ya no se importa en `screenshot.js`** (quedó sin uso ahí). Sigue existiendo en `src/utils/embeds.js` y se sigue usando en `ping.js`, `getcode.js` y `setlogchannel.js` — comandos que no son de "generar contenido para compartir" y se dejaron intactos a propósito.
-- **Los errores siguen siendo ephemeral**, sin cambios: `checkChannelPerms()`, "no se encontró la guía", "tierlist vacía", "sin rangos configurados" y el `catch` de cada handler siguen usando `interaction.editReply({ embeds: [buildErrorEmbed(...)] })`, visible solo para quien ejecutó el comando.
-
-**Cómo funciona el flujo ahora:**
-1. `interaction.deferReply({ ephemeral: true })` — se mantiene igual. Es solo el "ack" interno para que Discord no muestre "The application did not respond"; el placeholder ephemeral que crea es temporal.
-2. El comando genera la imagen (sin cambios en renderers/servicios) y hace `targetChannel.send({ content: '> @Usuario solicitó ...\n<título original>', files: [...] })` — un único mensaje público con el anuncio + el título que ya existía + los adjuntos.
-3. Si todo salió bien: `interaction.deleteReply()` borra el placeholder ephemeral. No queda ningún rastro privado — lo único visible es el mensaje público del paso 2.
-4. Si algo falla (permisos, arma/log no encontrado, tierlist vacía, error de render): se usa `interaction.editReply` con `buildErrorEmbed(...)`, que sigue siendo ephemeral — solo lo ve quien ejecutó el comando.
-
-**Qué NO se tocó (a propósito):**
-- Los renderers de imágenes (`renderTierlist*.js`, `renderWeapon*.js`, `renderKits.js`, `renderLogs*.js`) y los servicios de datos (`services/*.js`).
-- El sistema de permisos (`isAuthorized`, `resolveTargetChannel`, `checkChannelPerms`) — la opción `canal` sigue funcionando igual: si el usuario no está autorizado, se ignora silenciosamente y se usa el canal actual.
-- El sistema de publicación automática de logs (`logWatcher.js`, `logPublication.js`, `buildLogEmbed` en `embeds.js`) — es un flujo completamente aparte (Realtime de Supabase → embed en canal configurado), no pasa por `screenshot.js` y no se modificó.
-- Los otros comandos (`getcode.js`, `ping.js`, `setlogchannel.js`) — no generan contenido para compartir (código de admin por DM, diagnóstico, configuración), se dejaron ephemeral tal cual estaban.
-
-**Verificación realizada:**
-- `node --check` sobre los 22 archivos de `src/` (incluyendo `screenshot.js`): sin errores de sintaxis.
-- Diff completo contra el proyecto original: **`screenshot.js` es el único archivo modificado** — cero cambios accidentales en el resto del bot.
-- Revisión manual de los 7 sitios que antes hacían `editReply` de éxito: los 7 confirmados y reemplazados correctamente por `deleteReply().catch(() => {})`, con el anuncio nuevo incluido en el `content` de su `targetChannel.send` correspondiente.
-- No se pudo levantar el bot contra Discord/Supabase real en este entorno (sin credenciales ni acceso de red), así que la verificación de comportamiento en vivo (que el mensaje público se vea bien, que el placeholder ephemeral desaparezca) queda pendiente de una prueba manual en Discord.
-
-**Pendiente:**
-- Probar en Discord real los 7 casos (`/screenshot tierlist columna:<x>`, `/screenshot tierlist columna:all`, `/screenshot guias`, `/screenshot guia nombre:<x>`, `/screenshot kits`, `/screenshot logs`, `/screenshot logs ver:<log>`) y confirmar que el placeholder ephemeral desaparece sin dejar rastro y que el anuncio `> @Usuario solicitó ...` se ve bien encima del título de cada imagen.
-
-**Problemas conocidos:**
-- Ninguno nuevo.
-
----
-
-# Sesión 8 — Fix receta multi-modo + labels alineados con la web
-
-**Archivos modificados:** `src/utils/renderWeapon.js`, `src/utils/renderWeaponCatalog.js`, `src/commands/screenshot.js`
-
-- **Recipe rota tras actualización de la web:** la web evolucionó `upgrade_recipe` de formato plano `{materials, result}` a un sistema con múltiples métodos (`{methods:[...]}`) y modos (`trade | crafting | furnace | smithing`). El renderer del bot solo conocía el formato legacy. Arreglado con:
-  - `getRecipeMethods(recipe)`: normaliza ambos formatos — backward-compatible.
-  - `getRecipeSlots(method)`: devuelve `materials`, `grid` o `inputs` según el modo.
-  - `getRecipeLabel(method)`: etiqueta de modo para crafting/furnace/smithing.
-  - Carga de imágenes pre-hecha para todos los métodos en paralelo.
-  - Dibuja un bloque por método con etiqueta de modo si aplica.
-- **Labels actualizados para coincidir con la web:**
-  - `MEJORA` → `MEJORA/FABRICACIÓN` en el canvas de `renderWeapon.js`.
-  - `Guia de Armas` → `Guías` en footers de `renderWeapon.js` y `renderWeaponCatalog.js`.
-  - Descripciones y mensajes `content:` de `/screenshot armas` y `/screenshot arma` actualizados.
-
-Pendiente:
-- Confirmar con prueba manual que los 4 modos de receta se ven bien en Discord.
-
-Problemas conocidos:
-- Ninguno nuevo.
-
----
-
-# Sesión 7 — Fix definitivo de emojis en canvas + limpieza de texto
-
-**Problema raíz confirmado:** `fonts.js` cargaba los subsets de `@fontsource/noto-emoji` asumiendo nombres de archivo fijos (`noto-emoji-0-400-normal.woff2`, etc.) que no coinciden con la estructura real del paquete en su versión instalada. El `try/catch` marcaba `_registered = true` aunque la carga hubiera fallado silenciosamente, dejando la fuente de emoji sin registrar. Resultado: todos los emojis en canvas aparecían como cuadros vacíos □.
-
-**Archivos modificados:**
-
-- **`src/utils/fonts.js`** — reescrito con estrategia de 3 capas:
-  - *Capa 1*: lee dinámicamente todos los `.woff2` del directorio `@fontsource/noto-emoji/files` con `readdirSync`, sin asumir nombres fijos. Si el directorio existe y tiene archivos, los registra todos.
-  - *Capa 2*: si la capa 1 falla, busca `NotoColorEmoji.ttf` en las rutas estándar de Ubuntu/Debian donde Railway lo tiene instalado (`/usr/share/fonts/truetype/noto/...`).
-  - *Capa 3*: si ambas fallan, exporta `emojiAvailable = false` y loguea un aviso claro con instrucciones para el fix manual (copiar el TTF al repo).
-  - El `_registered = true` ya no se marca si la carga de emoji falló — solo cuando al menos una capa tuvo éxito.
-
-- **`src/utils/emojiText.js`** — usa `emojiAvailable` importado de `fonts.js`:
-  - Cuando es `false`, `fillTextWithEmoji` actúa como `ctx.fillText` directo (sin intentar cambiar la fuente a una que no existe). Resultado: el texto se ve pero sin emoji, en vez de cuadros.
-  - Cuando es `true`, el comportamiento de segmentación por grafema y cambio de fuente sigue exactamente igual que antes.
-
-- **`src/utils/renderLogDetail.js`** — eliminados los emojis de todas las secciones críticas que se veían como □ en el screenshot:
-  - Header: `📜 DETALLE DE LOG` → `DETALLE DE LOG`
-  - Meta row (categoría/relevancia/likes): eliminados ⚡ y ❤, los textos de categoría/relevancia se dibujan con `ctx.fillText` directo. Likes: `❤ 2` → `+2`
-  - Stats de mobs: `❤ Vida` / `⚔ Daño` / `🛡 Armor` → `Vida` / `Daño` / `Armor`
-  - Equipamiento y ubicación de mobs: eliminado `🎒` / `📍`
-  - Origen de items: eliminado `📍`
-  - Líneas de bloques libres: `fillTextWithEmoji` → `ctx.fillText` (el texto ya no tiene emojis)
-
-- **`src/utils/libreFields.js`** — campo `img` en `formatLibreForCanvas`: `🖼 ${shortUrl}` → `Imagen: ${shortUrl}`
-
-**Qué NO se tocó:**
-- Los embeds de Discord (texto en Discord sí renderiza emoji correctamente — no tiene el problema de fuentes)
-- La lógica de separación items/libres (`splitItems`, `parseLibreFields`) — ya funcionaba desde Sesión 6
-- `renderLogs.js`, `renderTierlist.js`, `renderWeapon.js` — no tenían el problema de cuadros en el screenshot reportado
-
-**Resultado esperado:** el canvas del `/screenshot logs ver:<log>` ya no muestra □. Los stats de mobs se leen como `Vida: 200  Daño: 40`, la meta row muestra la categoría y relevancia en texto, y los bloques libres muestran sus campos sin emojis pero con toda su información.
-
-**Pendiente:**
-- Si se quiere recuperar los emojis visuales (❤️ etc.) en el canvas, la solución robusta es copiar `NotoColorEmoji.ttf` al repo en `src/assets/fonts/` y registrarlo directamente en `fonts.js` como se hace con Liberation Sans. Eso garantiza que funcione sin depender de la estructura del paquete npm ni de las fuentes del sistema.
-
-**Problemas conocidos:**
-- La Capa 2 (fuentes del sistema) solo funciona si Railway tiene NotoColorEmoji instalado — esto varía según la imagen base del deploy. En la práctica Capa 1 debería resolverlo; si ambas fallan, el aviso en consola indica el fix manual.
-
----
-
-# Sesión 6 — soporte real de emoji en screenshots de canvas
-
-Después de la prueba visual se confirmó que los cuadros vacíos no eran datos faltantes: `@napi-rs/canvas` estaba intentando dibujar emoji con `Liberation Sans`, una fuente sin glifos de emoji. En Linux/Railway tampoco había una fuente de emoji del sistema disponible como fallback.
-
-**Correcciones hechas:**
-- `package.json`
-  - Se agregó `@fontsource/noto-emoji` como dependencia de producción.
-- `src/utils/fonts.js`
-  - Registra los subconjuntos WOFF2 de `Noto Color Emoji` desde `node_modules`, además de las fuentes Liberation existentes.
-  - Se agregó `FONT.emoji`.
-- `src/utils/emojiText.js` — archivo nuevo.
-  - Separa cada cadena por grafemas con `Intl.Segmenter`.
-  - Dibuja texto normal con `CulonesUI` y cada emoji con `Noto Color Emoji`.
-  - Respeta alineación izquierda, centrada y derecha, y permite medir cadenas mixtas correctamente.
-- `src/utils/renderLogDetail.js`
-  - Usa el helper para el pergamino del encabezado, emoji de categoría, relevancia, likes, estadísticas de mobs, equipamiento, ubicaciones, origen de items y líneas de bloques libres.
-- `src/utils/renderLogs.js`
-  - Usa el helper en el encabezado y metadatos de cada log.
-- `src/utils/renderWeaponCatalog.js`
-  - Usa el helper en el encabezado del catálogo.
-
-**Verificación:**
-- `node --check` pasa en todos los archivos modificados.
-- Se generaron localmente imágenes de prueba de detalle y lista de logs; los emoji se ven a color y el texto normal permanece visible.
-
-Pendiente:
-- Subir el patch y volver a desplegar para confirmar el resultado dentro de Discord/Railway.
-
-Problemas conocidos:
-- Los emoji se renderizan con el diseño de Noto Color Emoji, que puede verse ligeramente distinto al emoji nativo de Discord/Windows.
-
----
-
-# Sesión 5 — hotfix de JSON legacy en mobs/items y bloques libres vacíos
-
-Después de probar visualmente `/screenshot logs ver:<log>` en Discord, se detectó que el fix de bloques libres había resuelto `_libre` y el JSON crudo de `obtained_from` para libres, pero quedaban otros valores legacy guardados como JSON en secciones normales:
-
-**Problemas vistos en QA:**
-- En `MOBS`, el campo `equipment` podía llegar como JSON array (`[{"name":"Casco..."}]`) y `renderLogDetail.js` lo imprimía literal.
-- En `ITEMS`, `obtained_from` todavía podía imprimir JSON crudo si algún item normal venía con origen estructurado.
-- Algunos bloques libres antiguos aparecían como `Sin campos.` porque no tenían el formato exacto `{ key, value, subfields }` o venían como texto plano/legacy.
-- El título de la card de bloque libre se truncaba, perdiendo contexto en bloques antiguos donde el nombre contenía casi toda la información.
-
-**Correcciones hechas:**
-- `src/utils/libreFields.js`
-  - `parseLibreFields()` ahora acepta variantes legacy: `label`, `title`, `name`, `text`, `description`, `content`, `children`, `items`, etc.
-  - Si `obtained_from` viene como texto plano, se muestra como `Contenido` en vez de `Sin campos.`.
-  - Si el valor parece JSON pero está inválido, no se muestra el JSON crudo; se muestra un aviso legible.
-  - Se agregaron helpers `formatEquipmentForCanvas()` y `formatSourceForCanvas()` para convertir JSON array/object a texto corto y seguro.
-  - Se agregó `measureLibreTitleHeight()` para que títulos largos de bloques libres puedan ocupar varias líneas.
-- `src/utils/renderLogDetail.js`
-  - Mobs ahora formatean `equipment` con `formatEquipmentForCanvas()`, evitando JSON crudo.
-  - Items normales ahora formatean `obtained_from` con `formatSourceForCanvas()`, evitando JSON crudo en origen.
-  - Los títulos de bloques libres ya no se cortan a una sola línea; se envuelven y el alto de la card se recalcula.
-
-**Verificación:**
-- `node --check` pasa para `src/utils/libreFields.js`, `src/utils/renderLogDetail.js` y `src/utils/embeds.js`.
-- Prueba rápida de helper: `[{"name":"Casco de tortuga"}]` se convierte en `Casco de tortuga`, y un bloque libre de texto plano se convierte en campo `Contenido` sin mostrar JSON crudo.
-
-Pendiente:
-- Probar otra vez en Discord con el log de cumpleaños y revisar visualmente que `MOBS` ya no muestra JSON.
-
-Problemas conocidos:
-- Si un bloque libre antiguo no tiene datos en `obtained_from`, `description` ni `image_url`, no hay contenido real que recuperar desde el bot; solo se puede mostrar su nombre completo.
-
----
-
-# Sesión 4 — revisión QA y hotfix de altura
-
-Se revisó el zip generado en la Sesión 3 antes de subirlo. La lógica principal estaba bien, pero se detectó un detalle importante en el cálculo de altura de las cards de bloques libres: `measureLibreHeight()` calculaba solo el contenido interno y no sumaba el espacio del título de la card (`libre.name`), mientras que `renderLogDetail.js` empieza a dibujar los campos en `y + 28`. Eso podía hacer que los campos quedaran fuera del borde de la card o que el footer quedara demasiado cerca en bloques largos.
-
-**Correcciones hechas:**
-- `src/utils/libreFields.js`
-  - `measureLibreHeight()` ahora incluye el área del título (`TITLE_AREA_H = 28`) y margen inferior (`BOTTOM_PADDING = 10`), alineado con cómo dibuja `renderLogDetail.js`.
-  - `parseLibreFields()` ahora también soporta `obtained_from` si algún día llega como array ya parseado, además del JSON string actual.
-  - Se normalizan defensivamente `key`, `value` y `subfields` para evitar crasheos si algún campo viene incompleto.
-- `README.md`
-  - La descripción de `/screenshot logs ver:<log>` ahora menciona que los bloques libres salen en su propia sección y que no se muestra `_libre` ni JSON crudo.
-
-**Verificación:**
-- `node --check` pasa para `src/utils/libreFields.js`, `src/utils/embeds.js` y `src/utils/renderLogDetail.js`.
-- Prueba rápida del helper: `splitItems()` separa normales/libres y `formatLibreForCanvas()` devuelve líneas limpias sin JSON crudo.
-- No se tocó la lógica del embed ni el límite de 19 bloques libres.
-
-Pendiente:
-- Probar visualmente en Discord con `/screenshot logs ver:<log>` usando un bloque libre largo, uno vacío, uno con subcampos y uno con imagen.
-
-Problemas conocidos:
-- Ninguno confirmado después del hotfix. La única verificación que falta es visual en Discord o local renderizando una imagen real.
-
----
-
-# Sesión 3 — implementación de bloques libres en canvas
-
-Implementación completa del plan acordado en Sesión 2. Se corrigieron los bugs documentados de bloques libres dentro de `/screenshot logs ver:<log>`.
-
-**Archivos modificados:**
-- `src/utils/libreFields.js` — archivo nuevo. Helper compartido para parsear y separar bloques libres.
-  - `parseLibreFields(item)` — parsea `obtained_from` como JSON. Si es inválido/vacío devuelve `[]` sin crashear.
-  - `splitItems(items)` — separa `{ normalItems, libres }` por `item_type === '_libre'`.
-  - `formatLibreForCanvas(libre)` — convierte un bloque libre en líneas `{ text, style, indent }` para canvas.
-  - `measureLibreHeight(ctx, libre, maxWidth, fontSans)` — calcula la altura dinámica de una card de bloque libre.
-- `src/utils/embeds.js` — importa `parseLibreFields` y `splitItems` desde `libreFields.js`. `formatLibreBlockValue()` se mantiene local porque usa Markdown específico de Discord.
-- `src/utils/renderLogDetail.js` — separa items normales de libres, agrega sección `BLOQUES LIBRES`, parsea `obtained_from`, evita `_libre` y JSON crudo, corrige contador de `ITEMS`, corrige check de log vacío y calcula altura dinámica.
-- `PROJECT_MEMORY.md` — documenta la implementación.
-
-**Qué no se tocó:**
-- `logs.js`, `logWatcher.js`, `screenshot.js`: sin cambios.
-- El límite de 19 bloques libres del embed sigue igual.
-- La lógica de mobs/items normales en el embed y en el renderer sigue igual salvo la separación de libres.
-
-**Prueba manual recomendada:**
-1. Desplegar el bot.
-2. Crear un log en la web con bloques libres con campos, subcampos, descripción e imagen.
-3. Ejecutar `/screenshot logs ver:<nombre-del-log>`.
-4. Verificar que no aparece `_libre`, no aparece JSON crudo, `ITEMS` solo cuenta items normales y los bloques libres salen en sección propia.
-
-Pendiente:
-- Revisar visualmente el resultado final en Discord.
-
-Problemas conocidos:
-- En la implementación inicial de esta sesión, la medición de altura no contaba el título de la card. Fue corregido en Sesión 4.
-
----
-
-# Sesión 2 — análisis de bugs y plan de corrección
-
-Revisión exhaustiva de los bugs de bloques libres en `renderLogDetail.js`. No se modificó ningún archivo.
-
-**Bugs confirmados:**
-1. `item_type` se imprimía literal (`_libre`) como texto visible en el canvas.
-2. `obtained_from` se concatenaba como si fuera texto de ubicación, mostrando JSON crudo truncado.
-3. El contador `ITEMS (x)` mezclaba items normales y bloques libres.
-4. La estimación de altura del canvas usaba altura fija por item y no contemplaba bloques libres largos.
-5. El check de log vacío usaba `items.length`, incluyendo libres.
-6. `parseLibreFields` estaba duplicada inline en `embeds.js`; convenía mover el parseo a helper compartido.
-
-**Plan de corrección acordado:**
-- Crear `src/utils/libreFields.js` con `parseLibreFields`, `splitItems`, `formatLibreForCanvas` y `measureLibreHeight`.
-- Actualizar `embeds.js` para importar el parseo/separación desde el helper.
-- Actualizar `renderLogDetail.js` para separar `normalItems`/`libres`, corregir contador, añadir sección `BLOQUES LIBRES` con card dinámica y recalcular altura.
-- No tocar `logs.js`, `logWatcher.js` ni `screenshot.js`.
-- Cubrir casos borde: `obtained_from` null/vacío/JSON inválido, bloque sin campos, descripción larga, `image_url`, log con solo libres.
-
-Pendiente:
-- Implementar el plan anterior.
-- Actualizar README una vez resuelto.
-
-Problemas conocidos:
-- Los bugs listados arriba.
-
----
-
-# Sesión 1 — auditoría del flujo de logs y screenshots
-
-Sesión de solo lectura. Se retomó el pendiente de la Sesión 0 sobre bloques libres en `renderLogDetail.js`, pero no se modificó ningún archivo. Objetivo: mapear el problema antes de tocar código.
-
-**Archivos relacionados identificados:**
-- `src/services/logWatcher.js` — dispara el embed automático al detectar cambios Realtime en Supabase.
-- `src/utils/embeds.js` — `buildLogEmbed()`, ya arreglado en Sesión 0 para mostrar bloques libres completos en embeds.
-- `src/services/logs.js` — `loadLogById()` trae `items` sin separar normales de `_libre`.
-- `src/commands/screenshot.js` — subcomando `logs ver:<log>`, punto de entrada a `renderLogDetailImage()`.
-- `src/utils/renderLogDetail.js` — renderer de canvas pendiente; trataba todos los items por igual.
-- `src/utils/renderLogs.js` — renderer de la lista de logs recientes; no toca mobs/items y no le afecta este bug.
-
-**Flujo confirmado:**
-Web guarda el log (`logs` + `log_mobs` + `log_items`, con `_libre` guardando contenido dinámico como JSON string en `obtained_from`) → `logWatcher.js` reacciona por Realtime y llama a `buildLogEmbed()` → `/screenshot logs ver:<log>` usa `loadLogById()` + `renderLogDetailImage()` por una ruta independiente.
-
-**Representación de bloque libre:**
-- `item_type = '_libre'`
-- `obtained_from = JSON.stringify([{ key, value, subfields }])`
-- `description` e `image_url` se mantienen como en un item normal.
-
-Pendiente:
-- Hacer el plan técnico para corregir el renderer de canvas.
-
-Problemas conocidos:
-- El canvas podía mostrar `_libre` y JSON crudo.
-
----
-
-# Sesión 0 — embeds de bloques libres
-
-- En el embed que se publica automáticamente cuando se crea o edita un log (`buildLogEmbed`, usado por `logWatcher.js`), los bloques libres ahora se muestran completos en vez de resumidos.
-- Cada bloque libre tiene su propio campo en el embed con campos, subcampos, descripción e imagen de referencia como enlace.
-- Mobs e items normales no se tocaron; siguen resumidos en una línea cada uno.
-- Se agregó un límite defensivo de 19 bloques libres como máximo en el embed para no exceder el límite de campos de Discord.
-- README actualizado para reflejar que mobs/items van resumidos pero los bloques libres van completos.
-
-Pendiente:
-- El renderer de canvas usado por `/screenshot logs ver:<log>` (`renderLogDetail.js`) todavía no tenía tratamiento especial para bloques libres.
-
-Problemas conocidos:
-- Ninguno nuevo identificado en esa sesión.
+// src/utils/renderWeapon.js
+// Genera una imagen PNG por cada RANGO de un arma
+// (stats, habilidades, receta de mejora).
+
+import { createCanvas, loadImage } from '@napi-rs/canvas';
+import axios from 'axios';
+import { ensureFonts, FONT } from './fonts.js';
+
+// ── Tokens de diseño ─────────────────────────────────────────────────────────
+const BG_COLOR     = '#0c0a14';
+const BORDER_COLOR = 'rgba(255,255,255,0.08)';
+const GOLD         = '#f3b73a';
+const CYAN         = '#4dd4e8';
+const MAGENTA      = '#ff3d8e';
+const GREEN        = '#38e07a';
+const INK_100      = '#f4f1fb';
+const INK_400      = '#9a92b8';
+const INK_600      = 'rgba(255,255,255,0.35)';
+
+const CANVAS_W       = 640;
+const PADDING        = 20;
+const HEADER_IMG_SIZE = 72;
+
+const imageCache = new Map();
+const IMAGE_FAIL_CACHE = new Set();
+
+async function fetchImage(url) {
+  if (!url) return null;
+  if (IMAGE_FAIL_CACHE.has(url)) return null;
+  if (imageCache.has(url)) return imageCache.get(url);
+  try {
+    const response = await axios.get(url, {
+      responseType: 'arraybuffer',
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        'Referer': 'https://discord.com/',
+        'sec-fetch-dest': 'image',
+        'sec-fetch-mode': 'no-cors',
+        'sec-fetch-site': 'cross-site',
+      },
+    });
+    const img = await loadImage(Buffer.from(response.data));
+    imageCache.set(url, img);
+    return img;
+  } catch {
+    IMAGE_FAIL_CACHE.add(url);
+    return null;
+  }
+}
+
+function truncate(str, max) {
+  if (!str) return '';
+  return str.length > max ? str.slice(0, max - 1) + '…' : str;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// Ícono de llama dibujado a mano (curvas de canvas), no con el emoji 🔥.
+// Así se ve igual siempre, tenga o no el entorno una fuente de emoji
+// instalada (ver la estrategia de 3 capas documentada en fonts.js).
+function drawFlameIcon(ctx, cx, cy, size) {
+  const drawTeardrop = (scale, color) => {
+    const w = size * 0.5 * scale;
+    const h = size * scale;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + h / 2);
+    ctx.quadraticCurveTo(cx - w / 2, cy + h / 6, cx - w / 4, cy - h / 3);
+    ctx.quadraticCurveTo(cx, cy - h / 2 - h * 0.08, cx + w / 4, cy - h / 3);
+    ctx.quadraticCurveTo(cx + w / 2, cy + h / 6, cx, cy + h / 2);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
+  drawTeardrop(1, '#ff6a2d');
+  drawTeardrop(0.55, '#ffd23d');
+}
+
+function wrapText(ctx, text, maxWidth) {
+  if (!text) return [];
+  const words = text.split(/\s+/);
+  const lines = [];
+  let current = '';
+  for (const word of words) {
+    const test = current ? `${current} ${word}` : word;
+    if (ctx.measureText(test).width > maxWidth && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = test;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+function estimateHeight(rank) {
+  const measureCanvas = createCanvas(10, 10);
+  const ctx = measureCanvas.getContext('2d');
+  // Registrar fuentes para medir correctamente
+  ensureFonts();
+
+  let h = PADDING;
+  h += HEADER_IMG_SIZE + 16;
+
+  ctx.font = `13px ${FONT.sans}`;
+  const contentW = CANVAS_W - PADDING * 2;
+
+  if (rank.description) {
+    const lines = wrapText(ctx, rank.description, contentW - 4);
+    h += 22 + lines.length * 18 + 10;
+  }
+
+  const stats = Array.isArray(rank.stats) ? rank.stats : [];
+  if (stats.length > 0) h += 26 + stats.length * 30 + 4;
+
+  const abilities = Array.isArray(rank.abilities) ? rank.abilities : [];
+  if (abilities.length > 0) {
+    h += 26;
+    for (const ab of abilities) {
+      h += 8 + 22;
+      if (ab.description) h += wrapText(ctx, ab.description, contentW - 40).length * 16 + 4;
+      h += 22;
+      const abStats = Array.isArray(ab.stats) ? ab.stats : [];
+      if (abStats.length > 0) h += Math.ceil(abStats.length / 2) * 18 + 4;
+      h += 8 + 6;
+    }
+    h += 6;
+  }
+
+  if (rank.upgrade_recipe) {
+    // Soporte para el nuevo formato multi-método: {methods:[...]} o método directo
+    const recipeMethods = getRecipeMethods(rank.upgrade_recipe);
+    // Cada método puede tener materiales/grid de distinto tamaño
+    let recipeH = 26; // header
+    for (const method of recipeMethods) {
+      if (method.title || getRecipeLabel(method)) recipeH += 16;
+      const layout = getRecipeBoxLayout(method);
+      recipeH += Math.max(layout.height, CELL) + 14 /* nombre resultado */ + 20 /* margen */;
+    }
+    h += recipeH;
+  }
+
+  h += PADDING + 30;
+  return Math.max(Math.round(h), 280);
+}
+
+// ── Helpers de receta ────────────────────────────────────────────────────────
+// La web evolucionó de una receta plana {materials, result} a un sistema
+// con múltiples métodos y modos: trade/crafting/furnace/smithing.
+// getRecipeMethods normaliza ambos formatos para que el renderer siempre
+// reciba un array de métodos, independientemente de cuán vieja sea la data.
+
+function getRecipeMethods(recipe) {
+  if (!recipe) return [];
+  // Nuevo formato: { methods: [...] }
+  if (Array.isArray(recipe.methods) && recipe.methods.length > 0) return recipe.methods;
+  // Formato legacy / directo: el objeto raíz ES el único método
+  return [recipe];
+}
+
+function getRecipeSlots(method) {
+  const mode = method.mode || 'trade';
+  if (mode === 'crafting') return Array.isArray(method.grid) ? method.grid : [];
+  if (mode === 'furnace' || mode === 'smithing') return Array.isArray(method.inputs) ? method.inputs : [];
+  // trade: materials
+  return Array.isArray(method.materials) ? method.materials : [];
+}
+
+function getRecipeLabel(method) {
+  const mode = method.mode || 'trade';
+  if (mode === 'crafting') return 'Mesa de crafteo';
+  if (mode === 'furnace') {
+    const labels = { blast_furnace: 'Alto horno', smoker: 'Ahumador' };
+    return labels[method.furnace_type] || 'Horno';
+  }
+  if (mode === 'smithing') return 'Mesa de herrería';
+  return null; // trade: sin label de modo
+}
+
+// Igual que la web (weapons.css): cada modo tiene su propia disposición de
+// slots dentro de una "caja" tipo mesa de crafteo, no una fila continua.
+//   - crafting: grid 3x3 (9 slots)
+//   - furnace:  columna vertical (slot, llama, slot) — 2 slots
+//   - smithing: fila de 3 slots
+//   - trade:    fila libre, sin caja (comportamiento anterior)
+const CELL = 48;
+const CELL_GAP = 4;
+const BOX_PAD = 10;
+const FLAME_SIZE = 22;
+
+function getRecipeBoxLayout(method) {
+  const mode = method.mode || 'trade';
+  if (mode === 'crafting') {
+    const cols = 3, rows = 3;
+    return {
+      mode, cols, rows,
+      width:  cols * CELL + (cols - 1) * CELL_GAP + BOX_PAD * 2,
+      height: rows * CELL + (rows - 1) * CELL_GAP + BOX_PAD * 2,
+    };
+  }
+  if (mode === 'smithing') {
+    const cols = 3, rows = 1;
+    return {
+      mode, cols, rows,
+      width:  cols * CELL + (cols - 1) * CELL_GAP + BOX_PAD * 2,
+      height: rows * CELL + BOX_PAD * 2,
+    };
+  }
+  if (mode === 'furnace') {
+    return {
+      mode,
+      width:  CELL + BOX_PAD * 2,
+      height: CELL + CELL_GAP + FLAME_SIZE + CELL_GAP + CELL + BOX_PAD * 2,
+    };
+  }
+  // trade: sin caja, fila libre de slots
+  return { mode, width: null, height: CELL };
+}
+
+export async function renderWeaponRankImage({ weapon, category, type, rank }) {
+  ensureFonts();
+
+  const safeImageUrl = rank.image_url || weapon.image_url;
+  const headerImg    = await fetchImage(safeImageUrl);
+
+  const recipe       = rank.upgrade_recipe;
+  const recipeMethods = getRecipeMethods(recipe);
+
+  // Pre-cargar todas las imágenes de todos los métodos de receta
+  const methodImageData = await Promise.all(recipeMethods.map(async (method) => {
+    const slots = getRecipeSlots(method);
+    const slotImages = await Promise.all(slots.map(s => fetchImage(s?.image_url)));
+    const resultImg = await fetchImage(method.result?.image_url);
+    return { method, slots, slotImages, resultImg };
+  }));
+
+  const totalH = estimateHeight(rank);
+  const canvas  = createCanvas(CANVAS_W, totalH);
+  const ctx     = canvas.getContext('2d');
+
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, CANVAS_W, totalH);
+
+  let y          = PADDING;
+  const contentW = CANVAS_W - PADDING * 2;
+
+  // ── Header: imagen + nombre + badges ────────────────────────────────────
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  roundRect(ctx, PADDING, y, HEADER_IMG_SIZE, HEADER_IMG_SIZE, 8);
+  ctx.fill();
+
+  if (headerImg) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.save();
+    roundRect(ctx, PADDING, y, HEADER_IMG_SIZE, HEADER_IMG_SIZE, 8);
+    ctx.clip();
+    ctx.drawImage(headerImg, PADDING, y, HEADER_IMG_SIZE, HEADER_IMG_SIZE);
+    ctx.restore();
+  } else {
+    ctx.fillStyle    = INK_400;
+    ctx.font         = `bold 28px ${FONT.sans}`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText((weapon.name || '?')[0].toUpperCase(), PADDING + HEADER_IMG_SIZE / 2, y + HEADER_IMG_SIZE / 2);
+  }
+
+  const headTextX  = PADDING + HEADER_IMG_SIZE + 16;
+
+  ctx.fillStyle    = INK_100;
+  ctx.font         = `bold 22px ${FONT.sans}`;
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(truncate(weapon.name, 26), headTextX, y);
+
+  ctx.fillStyle = GOLD;
+  ctx.font      = `bold 14px ${FONT.sans}`;
+  ctx.fillText(rank.name, headTextX, y + 30);
+
+  // Badges
+  let badgeX     = headTextX;
+  const badgeY   = y + 52;
+  ctx.font       = `11px ${FONT.sans}`;
+
+  if (category) {
+    const label = ` ${category.label} `;
+    const w     = ctx.measureText(label).width + 10;
+    ctx.strokeStyle = category.color || CYAN;
+    ctx.lineWidth   = 1;
+    roundRect(ctx, badgeX, badgeY, w, 20, 10);
+    ctx.stroke();
+    ctx.fillStyle    = category.color || CYAN;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, badgeX + 5, badgeY + 10);
+    badgeX += w + 8;
+  }
+
+  if (type) {
+    const label = ` ${type.label} `;
+    const w     = ctx.measureText(label).width + 10;
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    roundRect(ctx, badgeX, badgeY, w, 20, 10);
+    ctx.fill();
+    ctx.fillStyle    = INK_100;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, badgeX + 5, badgeY + 10);
+  }
+
+  if (!weapon.published) {
+    ctx.fillStyle    = MAGENTA;
+    ctx.font         = `bold 10px ${FONT.sans}`;
+    ctx.textAlign    = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillText('OCULTA', CANVAS_W - PADDING, y);
+    ctx.textAlign = 'left';
+  }
+
+  y += HEADER_IMG_SIZE + 16;
+
+  // Separador
+  ctx.strokeStyle = BORDER_COLOR;
+  ctx.lineWidth   = 1;
+  ctx.beginPath();
+  ctx.moveTo(PADDING, y);
+  ctx.lineTo(CANVAS_W - PADDING, y);
+  ctx.stroke();
+  y += 14;
+
+  // ── Descripción ───────────────────────────────────────────────────────────
+  if (rank.description) {
+    ctx.fillStyle    = CYAN;
+    ctx.font         = `bold 13px ${FONT.sans}`;
+    ctx.textBaseline = 'top';
+    ctx.fillText('DESCRIPCION', PADDING, y);
+    y += 22;
+
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.font      = `13px ${FONT.sans}`;
+    const lines   = wrapText(ctx, rank.description, contentW - 4);
+    for (const line of lines) {
+      ctx.fillText(line, PADDING, y);
+      y += 18;
+    }
+    y += 10;
+  }
+
+  // ── Stats ─────────────────────────────────────────────────────────────────
+  const stats = Array.isArray(rank.stats) ? rank.stats : [];
+  if (stats.length > 0) {
+    ctx.fillStyle = GOLD;
+    ctx.font      = `bold 13px ${FONT.sans}`;
+    ctx.fillText('ESTADISTICAS', PADDING, y);
+    y += 26;
+
+    for (const s of stats) {
+      const label = truncate(String(s.key ?? s.label ?? ''), 18);
+      const value = String(s.value ?? '');
+
+      ctx.fillStyle = INK_400;
+      ctx.font      = `12px ${FONT.sans}`;
+      ctx.fillText(label, PADDING, y + 2);
+
+      const barX = PADDING + 130;
+      const barW = contentW - 130 - 60;
+
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      roundRect(ctx, barX, y, barW, 14, 4);
+      ctx.fill();
+
+      ctx.fillStyle = GOLD;
+      roundRect(ctx, barX, y, barW, 14, 4);
+      ctx.fill();
+
+      ctx.fillStyle    = INK_100;
+      ctx.font         = `bold 12px ${FONT.sans}`;
+      ctx.textAlign    = 'right';
+      ctx.fillText(truncate(value, 10), CANVAS_W - PADDING, y + 2);
+      ctx.textAlign = 'left';
+
+      y += 30;
+    }
+    y += 4;
+  }
+
+  // ── Habilidades ───────────────────────────────────────────────────────────
+  const abilities = Array.isArray(rank.abilities) ? rank.abilities : [];
+  if (abilities.length > 0) {
+    ctx.fillStyle = MAGENTA;
+    ctx.font      = `bold 13px ${FONT.sans}`;
+    ctx.fillText('HABILIDADES', PADDING, y);
+    y += 26;
+
+    for (const ab of abilities) {
+      const cardTop  = y;
+      const descLines = ab.description
+        ? wrapText(ctx, ab.description, contentW - 24)
+        : [];
+
+      let cardH = 8 + 22;
+      if (descLines.length > 0) cardH += descLines.length * 16 + 4;
+      cardH += 22;
+      const abStats = Array.isArray(ab.stats) ? ab.stats : [];
+      if (abStats.length > 0) cardH += Math.ceil(abStats.length / 2) * 18 + 4;
+      cardH += 8;
+
+      ctx.fillStyle = 'rgba(255,255,255,0.035)';
+      roundRect(ctx, PADDING, cardTop, contentW, cardH, 8);
+      ctx.fill();
+
+      let innerY       = cardTop + 8;
+      ctx.fillStyle    = INK_100;
+      ctx.font         = `bold 13px ${FONT.sans}`;
+      ctx.textBaseline = 'top';
+      ctx.textAlign    = 'left';
+      ctx.fillText(truncate(ab.name || 'Habilidad', 30), PADDING + 12, innerY);
+
+      if (ab.tag) {
+        ctx.fillStyle = MAGENTA;
+        ctx.font      = `10px ${FONT.sans}`;
+        ctx.textAlign = 'right';
+        ctx.fillText(ab.tag, PADDING + contentW - 12, innerY + 2);
+        ctx.textAlign = 'left';
+      }
+      innerY += 22;
+
+      if (descLines.length > 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.65)';
+        ctx.font      = `11px ${FONT.sans}`;
+        for (const line of descLines) {
+          ctx.fillText(line, PADDING + 12, innerY);
+          innerY += 16;
+        }
+        innerY += 4;
+      }
+
+      // Barra de nivel
+      const level    = ab.level ?? 0;
+      const levelMax = ab.level_max ?? 10;
+      const pct      = levelMax > 0 ? Math.min(1, Math.max(0, level / levelMax)) : 0;
+
+      ctx.fillStyle = INK_400;
+      ctx.font      = `10px ${FONT.sans}`;
+      ctx.fillText(`Nivel ${level}${levelMax ? ' / ' + levelMax : ''}`, PADDING + 12, innerY + 2);
+
+      const lvlBarX = PADDING + 110;
+      const lvlBarW = contentW - 110 - 24;
+
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      roundRect(ctx, lvlBarX, innerY, lvlBarW, 10, 4);
+      ctx.fill();
+
+      ctx.fillStyle = GREEN;
+      roundRect(ctx, lvlBarX, innerY, Math.max(4, lvlBarW * pct), 10, 4);
+      ctx.fill();
+      innerY += 22;
+
+      if (abStats.length > 0) {
+        ctx.font      = `10.5px ${FONT.sans}`;
+        const colW    = contentW / 2;
+        abStats.forEach((s, idx) => {
+          const col     = idx % 2;
+          const row     = Math.floor(idx / 2);
+          const sx      = PADDING + 12 + col * colW;
+          const sy      = innerY + row * 18;
+          const keyText = `${truncate(String(s.key ?? s.label ?? ''), 14)}: `;
+          ctx.fillStyle = INK_400;
+          ctx.fillText(keyText, sx, sy);
+          const labelW  = ctx.measureText(keyText).width;
+          ctx.fillStyle = INK_100;
+          ctx.fillText(truncate(String(s.value ?? ''), 14), sx + labelW, sy);
+        });
+      }
+
+      y = cardTop + cardH + 6;
+    }
+    y += 6;
+  }
+
+  // ── Mejora/fabricación ────────────────────────────────────────────────────
+  if (recipe && recipeMethods.length > 0) {
+    ctx.fillStyle    = CYAN;
+    ctx.font         = `bold 13px ${FONT.sans}`;
+    ctx.textAlign    = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('MEJORA/FABRICACIÓN', PADDING, y);
+    y += 26;
+
+    const RESULT_SIZE = 52;
+
+    // Dibuja un slot individual (fondo + imagen + cantidad), reutilizado
+    // tanto dentro de la caja tipo mesa de crafteo como en el resultado.
+    // emptyBg es configurable porque el mismo slot se usa sobre fondos muy
+    // distintos: el embed oscuro (trade) vs. la caja gris clara del grid
+    // (crafting/furnace/smithing), donde un blanco al 5% casi no se nota.
+    const drawSlotCell = (x, sy, size, slot, img, { isResult = false, showQty = true, emptyBg = 'rgba(255,255,255,0.05)' } = {}) => {
+      ctx.fillStyle = isResult ? 'rgba(243,183,58,0.12)' : emptyBg;
+      roundRect(ctx, x, sy, size, size, 6);
+      ctx.fill();
+      if (isResult) {
+        ctx.strokeStyle = GOLD;
+        ctx.lineWidth   = 1;
+        roundRect(ctx, x, sy, size, size, 6);
+        ctx.stroke();
+      } else if (!img) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+        ctx.lineWidth   = 1;
+        roundRect(ctx, x, sy, size, size, 6);
+        ctx.stroke();
+      }
+      if (img) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.save();
+        roundRect(ctx, x, sy, size, size, 6);
+        ctx.clip();
+        ctx.drawImage(img, x, sy, size, size);
+        ctx.restore();
+      }
+      const qty = slot?.qty ?? slot?.count ?? 1;
+      if (showQty && qty > 1) {
+        ctx.fillStyle    = INK_100;
+        ctx.font         = `bold 9px ${FONT.sans}`;
+        ctx.textAlign    = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`x${qty}`, x + size - 3, sy + size - 3);
+      }
+    };
+
+    for (const { method, slots, slotImages, resultImg } of methodImageData) {
+      const modeLabel = getRecipeLabel(method);
+      if (method.title || modeLabel) {
+        ctx.fillStyle    = INK_400;
+        ctx.font         = `10px ${FONT.sans}`;
+        ctx.textBaseline = 'top';
+        ctx.textAlign    = 'left';
+        ctx.fillText(method.title || modeLabel || '', PADDING, y);
+        y += 16;
+      }
+
+      const slotY  = y;
+      const layout = getRecipeBoxLayout(method);
+      const blockH = Math.max(layout.height, RESULT_SIZE);
+      let mx;
+
+      if (layout.mode === 'crafting' || layout.mode === 'smithing') {
+        // Caja gris tipo mesa de crafteo/herrería con grid interno
+        ctx.fillStyle   = '#8b889a';
+        roundRect(ctx, PADDING, slotY, layout.width, layout.height, 6);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.lineWidth   = 1;
+        roundRect(ctx, PADDING, slotY, layout.width, layout.height, 6);
+        ctx.stroke();
+
+        for (let i = 0; i < layout.cols * layout.rows; i++) {
+          const col = i % layout.cols;
+          const row = Math.floor(i / layout.cols);
+          const cx  = PADDING + BOX_PAD + col * (CELL + CELL_GAP);
+          const cy  = slotY + BOX_PAD + row * (CELL + CELL_GAP);
+          drawSlotCell(cx, cy, CELL, slots[i], slotImages[i], { emptyBg: 'rgba(0,0,0,0.18)' });
+        }
+        mx = PADDING + layout.width + 16;
+      } else if (layout.mode === 'furnace') {
+        // Caja gris vertical: slot arriba, llama, slot abajo
+        ctx.fillStyle   = '#8b889a';
+        roundRect(ctx, PADDING, slotY, layout.width, layout.height, 6);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.lineWidth   = 1;
+        roundRect(ctx, PADDING, slotY, layout.width, layout.height, 6);
+        ctx.stroke();
+
+        const cx = PADDING + BOX_PAD;
+        const topY = slotY + BOX_PAD;
+        drawSlotCell(cx, topY, CELL, slots[0], slotImages[0], { emptyBg: 'rgba(0,0,0,0.18)' });
+
+        const flameY = topY + CELL + CELL_GAP;
+        drawFlameIcon(ctx, cx + CELL / 2, flameY + FLAME_SIZE / 2, FLAME_SIZE);
+
+        const bottomY = flameY + FLAME_SIZE + CELL_GAP;
+        drawSlotCell(cx, bottomY, CELL, slots[1], slotImages[1], { emptyBg: 'rgba(0,0,0,0.18)' });
+
+        mx = PADDING + layout.width + 16;
+      } else {
+        // trade: fila libre de slots, sin caja, con nombre debajo de cada uno
+        mx = PADDING;
+        for (let i = 0; i < slots.length; i++) {
+          const slot = slots[i] || {};
+          drawSlotCell(mx, slotY, RESULT_SIZE, slot, slotImages[i]);
+
+          ctx.textAlign    = 'center';
+          ctx.font         = `9px ${FONT.sans}`;
+          ctx.fillStyle    = INK_400;
+          ctx.textBaseline = 'top';
+          ctx.fillText(truncate(slot.name || '', 10), mx + RESULT_SIZE / 2, slotY + RESULT_SIZE + 3);
+
+          mx += RESULT_SIZE + 8;
+        }
+      }
+
+      // Flecha
+      ctx.fillStyle    = INK_400;
+      ctx.font         = `bold 18px ${FONT.sans}`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('→', mx + 10, slotY + blockH / 2);
+      mx += 26;
+
+      // Resultado (centrado verticalmente respecto a la caja/fila)
+      const result   = method.result || {};
+      const resultY  = slotY + (blockH - RESULT_SIZE) / 2;
+      drawSlotCell(mx, resultY, RESULT_SIZE, result, resultImg, { isResult: true, showQty: false });
+
+      ctx.fillStyle    = GOLD;
+      ctx.textAlign    = 'center';
+      ctx.font         = `9px ${FONT.sans}`;
+      ctx.textBaseline = 'top';
+      ctx.fillText(truncate(result.name || '', 10), mx + RESULT_SIZE / 2, resultY + RESULT_SIZE + 3);
+      ctx.textAlign = 'left';
+
+      y = Math.max(slotY + blockH, resultY + RESULT_SIZE + 14) + 20;
+    }
+  }
+
+  // ── Footer ────────────────────────────────────────────────────────────────
+  ctx.strokeStyle = BORDER_COLOR;
+  ctx.lineWidth   = 1;
+  ctx.beginPath();
+  ctx.moveTo(PADDING, totalH - 30);
+  ctx.lineTo(CANVAS_W - PADDING, totalH - 30);
+  ctx.stroke();
+
+  ctx.fillStyle    = INK_600;
+  ctx.font         = `10px ${FONT.sans}`;
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(
+    `Culones RPG · Guías · ${new Date().toLocaleDateString('es-ES')}`,
+    PADDING,
+    totalH - 15
+  );
+
+  ctx.fillStyle = CYAN;
+  ctx.textAlign = 'right';
+  ctx.fillText('culones-rpg', CANVAS_W - PADDING, totalH - 15);
+
+  return canvas.toBuffer('image/png');
+}
