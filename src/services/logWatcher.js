@@ -14,6 +14,7 @@ import { supabase } from './supabase.js';
 import { getConfigValue, CONFIG_KEYS } from './botConfig.js';
 import { buildLogSummaryEmbed, buildLogPageEmbeds } from '../utils/logEmbeds.js';
 import { getPublication, upsertPublication } from './logPublication.js';
+import { PermissionFlagsBits } from 'discord.js';
 
 const SITE_URL = process.env.SITE_URL ?? '';
 
@@ -122,7 +123,7 @@ async function syncLogPublication(client, log, mode) {
 
   const { category, mobs, items } = await loadLogData(log);
   const summaryEmbed = buildLogSummaryEmbed(log, category, mobs, items, SITE_URL);
-  const pageEmbeds   = buildLogPageEmbeds(log, category, mobs, items);
+  const pageEmbeds   = buildLogPageEmbeds(log, category, mobs, items, SITE_URL);
 
   console.log(`[LogWatcher] "${log.title}": generadas ${pageEmbeds.length} página(s).`);
 
@@ -152,26 +153,33 @@ async function publishFresh(client, channel, log, summaryEmbed, pageEmbeds) {
     return;
   }
 
-  // 2. Crear hilo desde el mensaje resumen
+  // 2. Crear hilo privado desde el mensaje resumen
+  // `invitable: false` → solo el bot (y roles con ManageThreads) pueden invitar
   const threadName = log.title.slice(0, 100); // Discord: max 100 chars para nombre de hilo
   let thread;
   try {
     thread = await summaryMessage.startThread({
       name:                threadName,
       autoArchiveDuration: 10080, // 7 días
+      invitable:           false, // hilo privado: solo el bot puede añadir miembros
     });
-    console.log(`[LogWatcher] ✅ Hilo creado: "${threadName}" (${thread.id})`);
+    console.log(`[LogWatcher] ✅ Hilo privado creado: "${threadName}" (${thread.id})`);
   } catch (err) {
     console.error('[LogWatcher] ❌ Error creando hilo:', err.message);
-    // Guardamos el resumen sin hilo — el próximo UPDATE puede crear el hilo
     await upsertPublication(log.id, channel.id, summaryMessage.id, null, []);
     return;
   }
 
-  // 3. Enviar páginas dentro del hilo (una por mensaje)
+  // 3. Aplicar permisos: @everyone solo puede leer e historial+reacciones, no escribir
+  await applyThreadReadOnlyPerms(thread);
+
+  // 4. Enviar páginas dentro del hilo (una por mensaje)
   const pageIds = await sendPages(thread, pageEmbeds, log.title);
 
-  // 4. Persistir
+  // 5. Mensaje final con enlace a la web
+  await sendFinalLinkMessage(thread, log);
+
+  // 6. Persistir
   await upsertPublication(log.id, channel.id, summaryMessage.id, thread.id, pageIds);
   console.log(`[LogWatcher] ✅ Publicación guardada (${pageIds.length} páginas).`);
 }
@@ -221,8 +229,10 @@ async function syncExisting(client, channel, log, pub, summaryEmbed, pageEmbeds)
       thread = await summaryMessage.startThread({
         name:                log.title.slice(0, 100),
         autoArchiveDuration: 10080,
+        invitable:           false,
       });
-      console.log(`[LogWatcher] ✅ Hilo recreado: ${thread.id}`);
+      console.log(`[LogWatcher] ✅ Hilo privado recreado: ${thread.id}`);
+      await applyThreadReadOnlyPerms(thread);
     } catch (err) {
       console.error('[LogWatcher] ❌ Error recreando hilo:', err.message);
       await upsertPublication(log.id, channel.id, summaryMessage.id, null, []);
@@ -293,7 +303,13 @@ async function syncExisting(client, channel, log, pub, summaryEmbed, pageEmbeds)
     }
   }
 
-  // ── 4. Persistir estado actualizado ──────────────────────────────────────
+  // ── 4. Mensaje final con enlace ───────────────────────────────────────────
+  // Nota: en UPDATE no reenviamos el mensaje final para no duplicarlo.
+  // Solo lo añadimos si el hilo se acaba de recrear (newIds vacío al empezar).
+  // La forma más limpia: siempre intentamos borrarlo si existe y lo reenviamos.
+  await sendFinalLinkMessage(thread, log);
+
+  // ── 5. Persistir estado actualizado ──────────────────────────────────────
   await upsertPublication(log.id, channel.id, summaryMessage.id, thread.id, newIds);
   console.log(`[LogWatcher] ✅ Sincronización completada (${newIds.length} páginas).`);
 }
@@ -313,4 +329,76 @@ async function sendPages(thread, pageEmbeds, logTitle) {
     }
   }
   return ids;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Aplica permisos de solo-lectura + reacciones al hilo para @everyone.
+ * El bot conserva todos sus permisos (no se incluye en el override).
+ *
+ * Permisos que se DENIEGAN a @everyone:
+ *   - SendMessages         → no pueden escribir
+ *   - SendMessagesInThreads → ídem dentro de hilos (redundante pero explícito)
+ *   - CreatePublicThreads / CreatePrivateThreads → no crean sub-hilos
+ *
+ * Permisos que se PERMITEN a @everyone (ya los tienen por canal, se confirman):
+ *   - ViewChannel, ReadMessageHistory, AddReactions
+ *
+ * Requiere que el bot tenga ManageThreads o ManageRoles en el servidor.
+ */
+async function applyThreadReadOnlyPerms(thread) {
+  try {
+    const everyoneId = thread.guild.roles.everyone.id;
+    await thread.permissionOverwrites.edit(everyoneId, {
+      // Permitir explícitamente leer y reaccionar
+      [PermissionFlagsBits.ViewChannel]:           true,
+      [PermissionFlagsBits.ReadMessageHistory]:    true,
+      [PermissionFlagsBits.AddReactions]:          true,
+      // Denegar escritura de cualquier tipo
+      [PermissionFlagsBits.SendMessages]:               false,
+      [PermissionFlagsBits.SendMessagesInThreads]:      false,
+      [PermissionFlagsBits.CreatePublicThreads]:        false,
+      [PermissionFlagsBits.CreatePrivateThreads]:       false,
+    });
+    console.log(`[LogWatcher] 🔒 Permisos solo-lectura aplicados al hilo ${thread.id}`);
+  } catch (err) {
+    // No fatal — el hilo sigue funcionando, solo queda abierto a escritura
+    console.warn('[LogWatcher] ⚠️ No se pudieron aplicar permisos al hilo:', err.message);
+    console.warn('[LogWatcher]    Asegúrate de que el bot tenga el permiso "Gestionar hilos" en el servidor.');
+  }
+}
+
+/**
+ * Publica el mensaje final en el hilo con el enlace directo al log en la web.
+ * Si ya existe un mensaje final (en UPDATE) lo borra primero para no duplicar.
+ * Usa una "firma" reconocible en el contenido para identificarlo.
+ */
+async function sendFinalLinkMessage(thread, log) {
+  const logUrl = SITE_URL
+    ? `${SITE_URL.replace(/\/$/, '')}/index.html?log=${log.id}`
+    : null;
+
+  const content = logUrl
+    ? `📖 Para ver el log más detallado y con imágenes, visita la página.\n${logUrl}`
+    : '📖 Para ver el log más detallado y con imágenes, visita la página.';
+
+  // Buscar y eliminar mensajes finales anteriores del bot (para UPDATE)
+  try {
+    const recent = await thread.messages.fetch({ limit: 10 });
+    for (const [, msg] of recent) {
+      if (msg.author?.id === thread.client.user?.id && msg.content?.startsWith('📖 Para ver el log')) {
+        await msg.delete().catch(() => null);
+      }
+    }
+  } catch {
+    // Si no podemos leer mensajes, simplemente enviamos sin borrar
+  }
+
+  try {
+    await thread.send({ content });
+    console.log(`[LogWatcher] ✅ Mensaje final enviado en hilo ${thread.id}`);
+  } catch (err) {
+    console.warn('[LogWatcher] ⚠️ No se pudo enviar el mensaje final:', err.message);
+  }
 }

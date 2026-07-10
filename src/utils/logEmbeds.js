@@ -247,6 +247,9 @@ export function buildLogSummaryEmbed(log, category, mobs, items, siteUrl = '') {
 
   const descPreview = truncate(log.description || 'Sin descripción.', 300);
 
+  // URL directa al log en la web
+  const logUrl = siteUrl ? `${siteUrl.replace(/\/$/, '')}/index.html?log=${log.id}` : '';
+
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(truncate(`${catEmoji} ${log.title}`, SAFE_TITLE))
@@ -275,7 +278,7 @@ export function buildLogSummaryEmbed(log, category, mobs, items, siteUrl = '') {
     inline: false,
   });
 
-  if (siteUrl) embed.setURL(siteUrl);
+  if (logUrl) embed.setURL(logUrl);
 
   return embed;
 }
@@ -286,12 +289,21 @@ export function buildLogSummaryEmbed(log, category, mobs, items, siteUrl = '') {
  * Genera el array completo de EmbedBuilders para el hilo.
  * Cada embed = un mensaje. Sin límite fijo de páginas.
  */
-export function buildLogPageEmbeds(log, category, mobs, items) {
+export function buildLogPageEmbeds(log, category, mobs, items, siteUrl = '') {
   const color    = RELEVANCE_COLOR[log.relevance] ?? 0x4dd4e8;
   const catEmoji = category?.emoji ?? '📋';
   const catLabel = category?.label ?? log.category;
   const { normalItems, libres } = splitItems(items);
   const footerBase = `Culones RPG · ${truncate(log.title, 60)}`;
+
+  // URL base del log (sin item)
+  const logBaseUrl = siteUrl ? `${siteUrl.replace(/\/$/, '')}/index.html?log=${log.id}` : '';
+
+  /** Devuelve la URL directa a un item dentro del log, si hay siteUrl. */
+  function itemUrl(itemId) {
+    if (!logBaseUrl) return null;
+    return `${logBaseUrl}&item=${itemId}`;
+  }
 
   const builder = new PageBuilder(color, footerBase);
 
@@ -306,6 +318,10 @@ export function buildLogPageEmbeds(log, category, mobs, items) {
   if (normalItems.length) counts.push(`${normalItems.length} item${normalItems.length > 1 ? 's' : ''}`);
   if (libres.length)      counts.push(`${libres.length} bloque${libres.length > 1 ? 's' : ''} libre${libres.length > 1 ? 's' : ''}`);
   if (counts.length) builder.addField('📊 Contenido', counts.join(' · '));
+
+  if (logBaseUrl) {
+    builder.addField('🔗 Ver en la web', `[Abrir log completo](${logBaseUrl})`);
+  }
 
   // ── Descripción completa ──────────────────────────────────────────────────
   if (log.description && log.description.trim()) {
@@ -329,13 +345,16 @@ export function buildLogPageEmbeds(log, category, mobs, items) {
       if (mob.location)    lines.push(`📍 **Ubicación:** ${mob.location}`);
       if (mob.equipment)   lines.push(`🎒 **Equipamiento:** ${mob.equipment}`);
       if (mob.description) lines.push(`\n*${mob.description}*`);
-      if (mob.image_url)   lines.push(`[🖼 Imagen](${mob.image_url})`);
 
       // extra_fields jsonb
       const extra = Array.isArray(mob.extra_fields) ? mob.extra_fields : [];
       for (const ef of extra) {
         if (ef?.key && ef?.value != null) lines.push(`**${ef.key}:** ${ef.value}`);
       }
+
+      // Deep link al mob concreto
+      const url = itemUrl(mob.id);
+      if (url) lines.push(`[🔗 Ver en la web](${url})`);
 
       builder.addField(
         `👾 ${mob.name}`,
@@ -375,12 +394,15 @@ export function buildLogPageEmbeds(log, category, mobs, items) {
         lines.push(`📍 **Origen:** ${item.obtained_from}`);
       }
       if (item.description)  lines.push(`\n*${item.description}*`);
-      if (item.image_url)    lines.push(`[🖼 Imagen](${item.image_url})`);
 
       const extra = Array.isArray(item.extra_fields) ? item.extra_fields : [];
       for (const ef of extra) {
         if (ef?.key && ef?.value != null) lines.push(`**${ef.key}:** ${ef.value}`);
       }
+
+      // Deep link al item concreto
+      const url = itemUrl(item.id);
+      if (url) lines.push(`[🔗 Ver en la web](${url})`);
 
       builder.addField(
         `🗡️ ${item.name}`,
@@ -413,7 +435,10 @@ export function buildLogPageEmbeds(log, category, mobs, items) {
       }
 
       if (libre.description)  lines.push(`\n*${libre.description}*`);
-      if (libre.image_url)    lines.push(`[🖼 Imagen de referencia](${libre.image_url})`);
+
+      // Deep link al bloque libre concreto
+      const url = itemUrl(libre.id);
+      if (url) lines.push(`[🔗 Ver en la web](${url})`);
 
       const fullText = lines.join('\n') || '_Sin campos._';
 
@@ -433,8 +458,6 @@ export function buildLogPageEmbeds(log, category, mobs, items) {
     try {
       validateEmbed(embed, `página ${i + 1}`);
     } catch (err) {
-      // Log detallado pero no rompemos el flujo — Discord rechazará el mensaje
-      // y logWatcher registrará el error.
       console.error(`[logEmbeds] ⚠️  ${err.message}`);
     }
   });
