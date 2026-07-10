@@ -18,7 +18,7 @@
 // =========================================================
 
 import { EmbedBuilder } from 'discord.js';
-import { parseLibreFields, splitItems } from './libreFields.js';
+import { parseLibreFields, splitItems, formatEquipmentForCanvas } from './libreFields.js';
 
 // ── Colores por relevancia ────────────────────────────────────────────────────
 const RELEVANCE_COLOR = {
@@ -343,7 +343,10 @@ export function buildLogPageEmbeds(log, category, mobs, items, siteUrl = '') {
       if (stats.length) lines.push(stats.join(' · '));
 
       if (mob.location)    lines.push(`📍 **Ubicación:** ${mob.location}`);
-      if (mob.equipment)   lines.push(`🎒 **Equipamiento:** ${mob.equipment}`);
+      if (mob.equipment) {
+        const equipText = formatEquipmentForCanvas(mob.equipment);
+        if (equipText) lines.push(`🎒 **Equipamiento:** ${equipText}`);
+      }
       if (mob.description) lines.push(`\n*${mob.description}*`);
 
       // extra_fields jsonb
