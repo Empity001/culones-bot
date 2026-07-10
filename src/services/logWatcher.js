@@ -1,23 +1,22 @@
 // src/services/logWatcher.js
 // =========================================================
-// Escucha INSERT, UPDATE y DELETE relacionados con `logs` vía
-// Supabase Realtime. Para cada evento llama a syncLogPublication()
-// o a la limpieza de borrado:
-//   INSERT → publica resumen + crea hilo + envía páginas
-//   UPDATE → edita resumen + sincroniza páginas del hilo
-//   DELETE → borra el mensaje resumen y el hilo en Discord
+// Escucha INSERT/UPDATE en `logs` e INSERT en discord_deletion_queue
+// vía Supabase Realtime:
+//   INSERT en logs                  → publica resumen + hilo + páginas
+//   UPDATE en logs                  → edita resumen + sincroniza páginas
+//   INSERT en discord_deletion_queue → borra el mensaje resumen y el hilo
 //
 // La persistencia de IDs de Discord vive en log_discord_publications
 // (tabla separada), nunca en `logs`, para evitar que guardar IDs
 // dispare este watcher en loop.
 //
-// El borrado se detecta escuchando DELETE en log_discord_publications
-// (no en logs): esa fila se borra en cascada automáticamente cuando
-// se borra el log (FK con ON DELETE CASCADE), y con REPLICA IDENTITY
-// FULL (ver migration_publications_delete_sync.sql) el evento trae
-// consigo channel_id/summary_message_id/thread_id — todo lo necesario
-// para limpiar Discord sin tener que consultar la base de datos
-// después del hecho (la fila del log ya no existe para entonces).
+// El borrado usa una tabla-cola (discord_deletion_queue) en vez de
+// escuchar el DELETE en cascada de log_discord_publications: los
+// eventos DELETE de Realtime dependen de que RLS deje pasar el "old
+// row", y en la práctica eso llegaba vacío. delete_log() ahora
+// encola los IDs de Discord con un INSERT justo antes de borrar el
+// log — los eventos INSERT sí traen siempre la fila completa (el
+// mismo mecanismo, ya probado, que usa la publicación de logs nuevos).
 // =========================================================
 
 import { supabase } from './supabase.js';
@@ -33,8 +32,8 @@ const SITE_URL = process.env.SITE_URL ?? '';
 const _processing = new Set();
 
 // Mismo guard, pero para el flujo de borrado (evento separado,
-// sobre otra tabla — necesita su propio Set).
-const _deleting = new Set();
+// sobre otra tabla — clave por id de fila de la cola, no log_id).
+const _processingDeletions = new Set();
 
 // Canales de logs para los que ya se configuraron los permisos de
 // hilo (SendMessagesInThreads etc.) — evita repetir la llamada a la
@@ -83,38 +82,69 @@ export function startLogWatcher(client) {
       }
     )
     // El log ya fue borrado de `logs` para cuando llega este evento —
-    // por eso escuchamos DELETE en log_discord_publications (que se
-    // borra en cascada) en vez de en logs: así el payload.old todavía
-    // trae los IDs de Discord que necesitamos para limpiar el mensaje/hilo.
-    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'log_discord_publications' },
+    // por eso escuchamos un INSERT en discord_deletion_queue en vez de
+    // un DELETE en logs/log_discord_publications: delete_log() encola
+    // ahí los IDs de Discord justo antes de borrar, y un INSERT trae
+    // siempre la fila completa (a diferencia de un DELETE, que depende
+    // de RLS para incluir el "old row" y en la práctica llegaba vacío).
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'discord_deletion_queue' },
       async (payload) => {
-        const pub = payload.old;
-        if (!pub?.log_id) {
-          console.warn('[LogWatcher] DELETE de publicación sin log_id en el payload — ¿falta REPLICA IDENTITY FULL? Revisa migration_publications_delete_sync.sql');
-          return;
-        }
-        console.log(`[LogWatcher] DELETE detectado para log ${pub.log_id} — limpiando Discord.`);
-        if (_deleting.has(pub.log_id)) {
-          console.log(`[LogWatcher] Ya limpiando ${pub.log_id}, ignorando evento duplicado.`);
-          return;
-        }
-        _deleting.add(pub.log_id);
-        try {
-          await deleteDiscordPublication(client, pub);
-        } catch (err) {
-          console.error(`[LogWatcher] Error limpiando publicación de ${pub.log_id}:`, err.message);
-        } finally {
-          _deleting.delete(pub.log_id);
-        }
+        const row = payload.new;
+        console.log(`[LogWatcher] Borrado encolado para log ${row.log_id} — limpiando Discord.`);
+        await processDeletionQueueRow(client, row);
       }
     )
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        console.log('[LogWatcher] ✅ Suscrito a logs (INSERT + UPDATE) y a borrados de publicaciones (DELETE)');
+        console.log('[LogWatcher] ✅ Suscrito a logs (INSERT + UPDATE) y a la cola de borrados (INSERT)');
       } else {
         console.log('[LogWatcher] Estado:', status);
       }
     });
+
+  // Barrido inicial: si el bot estuvo apagado cuando se borró un log,
+  // la fila quedó esperando en la cola — la procesamos ahora en vez
+  // de perder esa limpieza para siempre.
+  sweepPendingDeletions(client);
+}
+
+/** Procesa una fila de la cola de borrados: limpia Discord y luego la retira de la cola. */
+async function processDeletionQueueRow(client, row) {
+  if (_processingDeletions.has(row.id)) {
+    console.log(`[LogWatcher] Ya procesando la fila de borrado ${row.id}, ignorando evento duplicado.`);
+    return;
+  }
+  _processingDeletions.add(row.id);
+  try {
+    await deleteDiscordPublication(client, row);
+  } catch (err) {
+    console.error(`[LogWatcher] Error limpiando Discord para el log ${row.log_id}:`, err.message);
+  } finally {
+    _processingDeletions.delete(row.id);
+  }
+
+  // Limpieza de la cola — si falla, no es grave (la fila solo queda
+  // huérfana ahí, no vuelve a intentar borrar nada en Discord porque
+  // Realtime no reenvía INSERTs ya entregados).
+  const { error } = await supabase.from('discord_deletion_queue').delete().eq('id', row.id);
+  if (error) {
+    console.warn(`[LogWatcher] ⚠️ No se pudo limpiar la fila ${row.id} de discord_deletion_queue:`, error.message);
+  }
+}
+
+/** Al iniciar el bot, procesa cualquier borrado que haya quedado pendiente mientras estaba apagado. */
+async function sweepPendingDeletions(client) {
+  const { data, error } = await supabase.from('discord_deletion_queue').select('*');
+  if (error) {
+    console.warn('[LogWatcher] ⚠️ No se pudo revisar discord_deletion_queue al iniciar:', error.message);
+    return;
+  }
+  if (!data || data.length === 0) return;
+
+  console.log(`[LogWatcher] 🧹 ${data.length} borrado(s) pendiente(s) encontrados al iniciar — procesando.`);
+  for (const row of data) {
+    await processDeletionQueueRow(client, row);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,10 +187,11 @@ async function getLogChannel(client) {
  * el hilo (con todas sus páginas, que se borran solas al borrar
  * el hilo) y el mensaje resumen en el canal principal.
  *
- * `pub` es el `old` row de log_discord_publications, ya borrada
- * de la base de datos — viene con todo gracias a REPLICA IDENTITY
- * FULL (ver migration_publications_delete_sync.sql). No se puede
- * volver a consultar la base de datos porque la fila ya no existe.
+ * `pub` es una fila de discord_deletion_queue — delete_log() la
+ * encoló ANTES de borrar el log, así que trae channel_id,
+ * summary_message_id y thread_id siempre completos (a diferencia
+ * de intentar leerlos de un evento DELETE, que depende de RLS
+ * para incluir el "old row" y no era confiable).
  *
  * Cada borrado va en su propio try/catch: si un admin ya borró el
  * mensaje o el hilo a mano en Discord, o si el canal fue eliminado,
