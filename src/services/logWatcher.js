@@ -1,13 +1,23 @@
 // src/services/logWatcher.js
 // =========================================================
-// Escucha INSERT y UPDATE en la tabla `logs` vía Supabase Realtime.
-// Para cada evento llama a syncLogPublication() que:
+// Escucha INSERT, UPDATE y DELETE relacionados con `logs` vía
+// Supabase Realtime. Para cada evento llama a syncLogPublication()
+// o a la limpieza de borrado:
 //   INSERT → publica resumen + crea hilo + envía páginas
 //   UPDATE → edita resumen + sincroniza páginas del hilo
+//   DELETE → borra el mensaje resumen y el hilo en Discord
 //
 // La persistencia de IDs de Discord vive en log_discord_publications
 // (tabla separada), nunca en `logs`, para evitar que guardar IDs
 // dispare este watcher en loop.
+//
+// El borrado se detecta escuchando DELETE en log_discord_publications
+// (no en logs): esa fila se borra en cascada automáticamente cuando
+// se borra el log (FK con ON DELETE CASCADE), y con REPLICA IDENTITY
+// FULL (ver migration_publications_delete_sync.sql) el evento trae
+// consigo channel_id/summary_message_id/thread_id — todo lo necesario
+// para limpiar Discord sin tener que consultar la base de datos
+// después del hecho (la fila del log ya no existe para entonces).
 // =========================================================
 
 import { supabase } from './supabase.js';
@@ -21,6 +31,10 @@ const SITE_URL = process.env.SITE_URL ?? '';
 // Guard contra procesamiento simultáneo del mismo log
 // (Supabase Realtime puede entregar varios eventos seguidos)
 const _processing = new Set();
+
+// Mismo guard, pero para el flujo de borrado (evento separado,
+// sobre otra tabla — necesita su propio Set).
+const _deleting = new Set();
 
 // Canales de logs para los que ya se configuraron los permisos de
 // hilo (SendMessagesInThreads etc.) — evita repetir la llamada a la
@@ -68,9 +82,35 @@ export function startLogWatcher(client) {
         }
       }
     )
+    // El log ya fue borrado de `logs` para cuando llega este evento —
+    // por eso escuchamos DELETE en log_discord_publications (que se
+    // borra en cascada) en vez de en logs: así el payload.old todavía
+    // trae los IDs de Discord que necesitamos para limpiar el mensaje/hilo.
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'log_discord_publications' },
+      async (payload) => {
+        const pub = payload.old;
+        if (!pub?.log_id) {
+          console.warn('[LogWatcher] DELETE de publicación sin log_id en el payload — ¿falta REPLICA IDENTITY FULL? Revisa migration_publications_delete_sync.sql');
+          return;
+        }
+        console.log(`[LogWatcher] DELETE detectado para log ${pub.log_id} — limpiando Discord.`);
+        if (_deleting.has(pub.log_id)) {
+          console.log(`[LogWatcher] Ya limpiando ${pub.log_id}, ignorando evento duplicado.`);
+          return;
+        }
+        _deleting.add(pub.log_id);
+        try {
+          await deleteDiscordPublication(client, pub);
+        } catch (err) {
+          console.error(`[LogWatcher] Error limpiando publicación de ${pub.log_id}:`, err.message);
+        } finally {
+          _deleting.delete(pub.log_id);
+        }
+      }
+    )
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        console.log('[LogWatcher] ✅ Suscrito a logs (INSERT + UPDATE)');
+        console.log('[LogWatcher] ✅ Suscrito a logs (INSERT + UPDATE) y a borrados de publicaciones (DELETE)');
       } else {
         console.log('[LogWatcher] Estado:', status);
       }
@@ -110,6 +150,47 @@ async function getLogChannel(client) {
     return null;
   });
   return channel;
+}
+
+/**
+ * Borra de Discord todo lo relacionado a un log ya eliminado:
+ * el hilo (con todas sus páginas, que se borran solas al borrar
+ * el hilo) y el mensaje resumen en el canal principal.
+ *
+ * `pub` es el `old` row de log_discord_publications, ya borrada
+ * de la base de datos — viene con todo gracias a REPLICA IDENTITY
+ * FULL (ver migration_publications_delete_sync.sql). No se puede
+ * volver a consultar la base de datos porque la fila ya no existe.
+ *
+ * Cada borrado va en su propio try/catch: si un admin ya borró el
+ * mensaje o el hilo a mano en Discord, o si el canal fue eliminado,
+ * eso no debe impedir borrar lo demás.
+ */
+async function deleteDiscordPublication(client, pub) {
+  // 1. Borrar el hilo (esto se lleva todas las páginas con él).
+  if (pub.thread_id) {
+    try {
+      const thread = await client.channels.fetch(pub.thread_id);
+      await thread.delete();
+      console.log(`[LogWatcher] 🗑️  Hilo ${pub.thread_id} eliminado.`);
+    } catch (err) {
+      console.warn(`[LogWatcher] ⚠️ No se pudo borrar el hilo ${pub.thread_id} (¿ya no existe?):`, err.message);
+    }
+  }
+
+  // 2. Borrar el mensaje resumen del canal principal.
+  if (pub.channel_id && pub.summary_message_id) {
+    try {
+      const channel = await client.channels.fetch(pub.channel_id);
+      const message = await channel.messages.fetch(pub.summary_message_id);
+      await message.delete();
+      console.log(`[LogWatcher] 🗑️  Resumen ${pub.summary_message_id} eliminado.`);
+    } catch (err) {
+      console.warn(`[LogWatcher] ⚠️ No se pudo borrar el resumen ${pub.summary_message_id} (¿ya no existe?):`, err.message);
+    }
+  } else {
+    console.warn(`[LogWatcher] ⚠️ Publicación de ${pub.log_id} sin channel_id/summary_message_id — nada que borrar en el canal principal.`);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
