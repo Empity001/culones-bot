@@ -232,13 +232,19 @@ async function syncExisting(client, channel, log, pub, summaryEmbed, pageEmbeds)
         invitable:           false,
       });
       console.log(`[LogWatcher] ✅ Hilo privado recreado: ${thread.id}`);
-      await applyThreadReadOnlyPerms(thread);
     } catch (err) {
       console.error('[LogWatcher] ❌ Error recreando hilo:', err.message);
       await upsertPublication(log.id, channel.id, summaryMessage.id, null, []);
       return;
     }
   }
+
+  // Reafirmar privacidad y permisos SIEMPRE — tanto si el hilo se acaba
+  // de crear como si ya existía. Esto corrige también hilos publicados
+  // antes de que este comportamiento existiera, o que algún admin haya
+  // cambiado manualmente en Discord.
+  await ensureThreadIsPrivate(thread);
+  await applyThreadReadOnlyPerms(thread);
 
   // Desarchivar si está archivado
   if (thread.archived) {
@@ -332,6 +338,22 @@ async function sendPages(thread, pageEmbeds, logTitle) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Se asegura de que el hilo sea privado (invitable: false).
+ * Necesario para hilos creados antes de este cambio, o que un admin
+ * haya modificado manualmente en Discord — el flag `invitable` no se
+ * puede fijar solo al crear, también se corrige en cada sincronización.
+ */
+async function ensureThreadIsPrivate(thread) {
+  if (thread.invitable === false) return; // ya está correcto, nada que hacer
+  try {
+    await thread.edit({ invitable: false });
+    console.log(`[LogWatcher] 🔒 Hilo ${thread.id} marcado como privado (invitable: false)`);
+  } catch (err) {
+    console.warn('[LogWatcher] ⚠️ No se pudo marcar el hilo como privado:', err.message);
+  }
+}
 
 /**
  * Aplica permisos de solo-lectura + reacciones al hilo para @everyone.
