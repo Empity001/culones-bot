@@ -4,6 +4,44 @@ Registro de sesiones de desarrollo del bot de Discord. Cada entrada resume qué 
 
 ---
 
+# Sesión 9 — /screenshot: resultado público, sin confirmación privada
+
+**Archivos modificados:** `src/commands/screenshot.js` (único archivo tocado).
+
+**Motivo:** todos los subcomandos de `/screenshot` (`tierlist`, `guias`, `guia`, `kits`, `logs`) ya enviaban la imagen como mensaje normal del canal (`targetChannel.send(...)`, público desde siempre). Lo que sí era privado era la confirmación posterior (`interaction.editReply` con `buildSuccessEmbed('Imagen enviada', ...)`), visible solo para quien ejecutó el comando ("Only you can see this"). Se quería que el único resultado visible fuera el mensaje público, con un anuncio de quién lo pidió.
+
+**Cambios:**
+- **Anuncio público de quién pidió el contenido**: nueva función local `requestAnnouncement(interaction, description)` → devuelve `> ${interaction.user} solicitó ${description}.`. Se antepone (con `\n`) al `content` que ya se mandaba en cada `targetChannel.send(...)`, en el **mismo mensaje** que la imagen — nunca como mensaje aparte. Esto es automático para los casos con varias imágenes en un solo `send` (p. ej. `/screenshot guia` manda un rango por adjunto pero todos en un solo mensaje): el anuncio no se repite porque solo hay un `send` por subcomando, como ya era el caso antes de este cambio.
+- **Se eliminó la confirmación ephemeral de éxito**: los 7 `await interaction.editReply({ embeds: [buildSuccessEmbed(...)] })` que confirmaban el envío se reemplazaron por `await interaction.deleteReply().catch(() => {})`. El `.catch(() => {})` es defensivo (mismo patrón que ya usa `interactionCreate.js` para follow-ups): si el borrado del placeholder ephemeral fallara por lo que sea, no se debe reportar un error al usuario cuando el contenido público ya se envió correctamente.
+- **`buildSuccessEmbed` ya no se importa en `screenshot.js`** (quedó sin uso ahí). Sigue existiendo en `src/utils/embeds.js` y se sigue usando en `ping.js`, `getcode.js` y `setlogchannel.js` — comandos que no son de "generar contenido para compartir" y se dejaron intactos a propósito.
+- **Los errores siguen siendo ephemeral**, sin cambios: `checkChannelPerms()`, "no se encontró la guía", "tierlist vacía", "sin rangos configurados" y el `catch` de cada handler siguen usando `interaction.editReply({ embeds: [buildErrorEmbed(...)] })`, visible solo para quien ejecutó el comando.
+
+**Cómo funciona el flujo ahora:**
+1. `interaction.deferReply({ ephemeral: true })` — se mantiene igual. Es solo el "ack" interno para que Discord no muestre "The application did not respond"; el placeholder ephemeral que crea es temporal.
+2. El comando genera la imagen (sin cambios en renderers/servicios) y hace `targetChannel.send({ content: '> @Usuario solicitó ...\n<título original>', files: [...] })` — un único mensaje público con el anuncio + el título que ya existía + los adjuntos.
+3. Si todo salió bien: `interaction.deleteReply()` borra el placeholder ephemeral. No queda ningún rastro privado — lo único visible es el mensaje público del paso 2.
+4. Si algo falla (permisos, arma/log no encontrado, tierlist vacía, error de render): se usa `interaction.editReply` con `buildErrorEmbed(...)`, que sigue siendo ephemeral — solo lo ve quien ejecutó el comando.
+
+**Qué NO se tocó (a propósito):**
+- Los renderers de imágenes (`renderTierlist*.js`, `renderWeapon*.js`, `renderKits.js`, `renderLogs*.js`) y los servicios de datos (`services/*.js`).
+- El sistema de permisos (`isAuthorized`, `resolveTargetChannel`, `checkChannelPerms`) — la opción `canal` sigue funcionando igual: si el usuario no está autorizado, se ignora silenciosamente y se usa el canal actual.
+- El sistema de publicación automática de logs (`logWatcher.js`, `logPublication.js`, `buildLogEmbed` en `embeds.js`) — es un flujo completamente aparte (Realtime de Supabase → embed en canal configurado), no pasa por `screenshot.js` y no se modificó.
+- Los otros comandos (`getcode.js`, `ping.js`, `setlogchannel.js`) — no generan contenido para compartir (código de admin por DM, diagnóstico, configuración), se dejaron ephemeral tal cual estaban.
+
+**Verificación realizada:**
+- `node --check` sobre los 22 archivos de `src/` (incluyendo `screenshot.js`): sin errores de sintaxis.
+- Diff completo contra el proyecto original: **`screenshot.js` es el único archivo modificado** — cero cambios accidentales en el resto del bot.
+- Revisión manual de los 7 sitios que antes hacían `editReply` de éxito: los 7 confirmados y reemplazados correctamente por `deleteReply().catch(() => {})`, con el anuncio nuevo incluido en el `content` de su `targetChannel.send` correspondiente.
+- No se pudo levantar el bot contra Discord/Supabase real en este entorno (sin credenciales ni acceso de red), así que la verificación de comportamiento en vivo (que el mensaje público se vea bien, que el placeholder ephemeral desaparezca) queda pendiente de una prueba manual en Discord.
+
+**Pendiente:**
+- Probar en Discord real los 7 casos (`/screenshot tierlist columna:<x>`, `/screenshot tierlist columna:all`, `/screenshot guias`, `/screenshot guia nombre:<x>`, `/screenshot kits`, `/screenshot logs`, `/screenshot logs ver:<log>`) y confirmar que el placeholder ephemeral desaparece sin dejar rastro y que el anuncio `> @Usuario solicitó ...` se ve bien encima del título de cada imagen.
+
+**Problemas conocidos:**
+- Ninguno nuevo.
+
+---
+
 # Sesión 8 — Fix receta multi-modo + labels alineados con la web
 
 **Archivos modificados:** `src/utils/renderWeapon.js`, `src/utils/renderWeaponCatalog.js`, `src/commands/screenshot.js`

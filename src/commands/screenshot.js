@@ -21,7 +21,7 @@ import {
   AttachmentBuilder,
 } from 'discord.js';
 import { isAuthorized }                      from '../utils/isAuthorized.js';
-import { buildErrorEmbed, buildSuccessEmbed } from '../utils/embeds.js';
+import { buildErrorEmbed }                   from '../utils/embeds.js';
 import { loadTierlistData, groupByRow, TIER_COLUMNS } from '../services/tierlist.js';
 import { renderTierlistImage }               from '../utils/renderTierlist.js';
 import { renderTierlistFullImage }           from '../utils/renderTierlistFull.js';
@@ -238,6 +238,16 @@ async function checkChannelPerms(interaction, targetChannel) {
   return true;
 }
 
+/**
+ * Línea pública de "quién lo pidió", pensada para anteponerse al contenido
+ * que genera cada subcomando. Va DENTRO del mismo mensaje que la imagen
+ * (mismo `content`), nunca como mensaje separado — así, si un subcomando
+ * adjunta varias imágenes en un solo `send`, el anuncio no se repite.
+ */
+function requestAnnouncement(interaction, description) {
+  return `> ${interaction.user} solicitó ${description}.`;
+}
+
 // ── /screenshot tierlist ──────────────────────────────────────────────────────
 async function handleTierlist(interaction) {
   await interaction.deferReply({ ephemeral: true });
@@ -264,12 +274,10 @@ async function handleTierlist(interaction) {
       const attachment = new AttachmentBuilder(pngBuffer, { name: `tierlist-completa-${Date.now()}.png` });
 
       await targetChannel.send({
-        content: '📊 **TIERLIST COMPLETA** · Arma / Sub-arma / Accesorio',
+        content: `${requestAnnouncement(interaction, 'la tierlist completa (Arma / Sub-arma / Accesorio)')}\n📊 **TIERLIST COMPLETA** · Arma / Sub-arma / Accesorio`,
         files:   [attachment],
       });
-      await interaction.editReply({
-        embeds: [buildSuccessEmbed('Imagen enviada', `La tierlist completa (3 columnas) fue enviada a ${targetChannel}. 🖼️`)],
-      });
+      await interaction.deleteReply().catch(() => {});
       return;
     }
 
@@ -280,12 +288,10 @@ async function handleTierlist(interaction) {
     const attachment = new AttachmentBuilder(pngBuffer, { name: `tierlist-${columnKey}-${Date.now()}.png` });
 
     await targetChannel.send({
-      content: `📊 **TIERLIST · ${column.label.toUpperCase()}**`,
+      content: `${requestAnnouncement(interaction, `la tierlist de **${column.label}**`)}\n📊 **TIERLIST · ${column.label.toUpperCase()}**`,
       files:   [attachment],
     });
-    await interaction.editReply({
-      embeds: [buildSuccessEmbed('Imagen enviada', `La tierlist de **${column.label}** fue enviada a ${targetChannel}. 🖼️`)],
-    });
+    await interaction.deleteReply().catch(() => {});
 
   } catch (err) {
     console.error('[screenshot:tierlist]', err);
@@ -329,15 +335,10 @@ async function handleWeaponCatalog(interaction) {
     const attachment = new AttachmentBuilder(pngBuffer, { name: `armas-catalogo-${Date.now()}.png` });
 
     await targetChannel.send({
-      content: `⚔️ **GUÍAS · CATÁLOGO** · ${filterLabel} (${weapons.length} arma${weapons.length !== 1 ? 's' : ''})`,
+      content: `${requestAnnouncement(interaction, `el catálogo de Guías (${filterLabel}, ${weapons.length} arma${weapons.length !== 1 ? 's' : ''})`)}\n⚔️ **GUÍAS · CATÁLOGO** · ${filterLabel} (${weapons.length} arma${weapons.length !== 1 ? 's' : ''})`,
       files:   [attachment],
     });
-    await interaction.editReply({
-      embeds: [buildSuccessEmbed(
-        'Imagen enviada',
-        `El catálogo de Guías (${filterLabel}, ${weapons.length} arma${weapons.length !== 1 ? 's' : ''}) fue enviado a ${targetChannel}. 🖼️`,
-      )],
-    });
+    await interaction.deleteReply().catch(() => {});
 
   } catch (err) {
     console.error('[screenshot:guias]', err);
@@ -380,15 +381,10 @@ async function handleWeapon(interaction) {
     }
 
     await targetChannel.send({
-      content: `⚔️ **GUÍAS · ${weapon.name.toUpperCase()}** · ${ranks.length} rango${ranks.length > 1 ? 's' : ''}`,
+      content: `${requestAnnouncement(interaction, `la guía de **${weapon.name}**`)}\n⚔️ **GUÍAS · ${weapon.name.toUpperCase()}** · ${ranks.length} rango${ranks.length > 1 ? 's' : ''}`,
       files:   attachments,
     });
-    await interaction.editReply({
-      embeds: [buildSuccessEmbed(
-        'Imágenes enviadas',
-        `La ficha de **${weapon.name}** (${ranks.length} rango${ranks.length > 1 ? 's' : ''}) fue enviada a ${targetChannel}. 🖼️`,
-      )],
-    });
+    await interaction.deleteReply().catch(() => {});
 
   } catch (err) {
     console.error('[screenshot:guia]', err);
@@ -413,15 +409,10 @@ async function handleKits(interaction) {
     const attachment = new AttachmentBuilder(pngBuffer, { name: `kits-${Date.now()}.png` });
 
     await targetChannel.send({
-      content: `🎒 **KITS RECOMENDADOS** (${kits.length} kit${kits.length !== 1 ? 's' : ''})`,
+      content: `${requestAnnouncement(interaction, 'los kits recomendados')}\n🎒 **KITS RECOMENDADOS** (${kits.length} kit${kits.length !== 1 ? 's' : ''})`,
       files:   [attachment],
     });
-    await interaction.editReply({
-      embeds: [buildSuccessEmbed(
-        'Imagen enviada',
-        `Los kits recomendados (${kits.length}) fueron enviados a ${targetChannel}. 🖼️`,
-      )],
-    });
+    await interaction.deleteReply().catch(() => {});
 
   } catch (err) {
     console.error('[screenshot:kits]', err);
@@ -449,12 +440,10 @@ async function handleLogs(interaction) {
       const attachment = new AttachmentBuilder(pngBuffer, { name: `log-${log.id}-${Date.now()}.png` });
 
       await targetChannel.send({
-        content: `📜 **LOG · ${log.title.toUpperCase()}**`,
+        content: `${requestAnnouncement(interaction, `el detalle del log **${log.title}**`)}\n📜 **LOG · ${log.title.toUpperCase()}**`,
         files:   [attachment],
       });
-      await interaction.editReply({
-        embeds: [buildSuccessEmbed('Imagen enviada', `El detalle del log **${log.title}** fue enviado a ${targetChannel}. 🖼️`)],
-      });
+      await interaction.deleteReply().catch(() => {});
       return;
     }
 
@@ -464,12 +453,10 @@ async function handleLogs(interaction) {
     const attachment = new AttachmentBuilder(pngBuffer, { name: `logs-${Date.now()}.png` });
 
     await targetChannel.send({
-      content: `📜 **LOGS RECIENTES** (últimos ${logs.length})`,
+      content: `${requestAnnouncement(interaction, 'una captura de los Logs recientes')}\n📜 **LOGS RECIENTES** (últimos ${logs.length})`,
       files:   [attachment],
     });
-    await interaction.editReply({
-      embeds: [buildSuccessEmbed('Imagen enviada', `La lista de logs fue enviada a ${targetChannel}. 🖼️`)],
-    });
+    await interaction.deleteReply().catch(() => {});
 
   } catch (err) {
     console.error('[screenshot:logs]', err);
