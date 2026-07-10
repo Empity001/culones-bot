@@ -22,6 +22,11 @@ const SITE_URL = process.env.SITE_URL ?? '';
 // (Supabase Realtime puede entregar varios eventos seguidos)
 const _processing = new Set();
 
+// Canales de logs para los que ya se configuraron los permisos de
+// hilo (SendMessagesInThreads etc.) — evita repetir la llamada a la
+// API en cada INSERT/UPDATE una vez que el canal quedó configurado.
+const _channelThreadPermsConfigured = new Set();
+
 export function startLogWatcher(client) {
   supabase
     .channel('bot-log-watcher')
@@ -121,6 +126,12 @@ async function syncLogPublication(client, log, mode) {
   const channel = await getLogChannel(client);
   if (!channel) return;
 
+  // Configura el canal para que sus hilos sean de solo lectura para
+  // @everyone. Los hilos de Discord NO tienen permisos propios — siempre
+  // heredan del canal padre — así que esto se hace una vez por canal,
+  // no por hilo.
+  await ensureLogChannelThreadPerms(channel);
+
   const { category, mobs, items } = await loadLogData(log);
   const summaryEmbed = buildLogSummaryEmbed(log, category, mobs, items, SITE_URL);
   const pageEmbeds   = buildLogPageEmbeds(log, category, mobs, items, SITE_URL);
@@ -170,16 +181,15 @@ async function publishFresh(client, channel, log, summaryEmbed, pageEmbeds) {
     return;
   }
 
-  // 3. Aplicar permisos: @everyone solo puede leer e historial+reacciones, no escribir
-  await applyThreadReadOnlyPerms(thread);
-
-  // 4. Enviar páginas dentro del hilo (una por mensaje)
+  // 3. Enviar páginas dentro del hilo (una por mensaje)
+  // (Los permisos de solo-lectura ya se configuraron a nivel del canal
+  // padre en ensureLogChannelThreadPerms — los hilos los heredan.)
   const pageIds = await sendPages(thread, pageEmbeds, log.title);
 
-  // 5. Mensaje final con enlace a la web
+  // 4. Mensaje final con enlace a la web
   await sendFinalLinkMessage(thread, log);
 
-  // 6. Persistir
+  // 5. Persistir
   await upsertPublication(log.id, channel.id, summaryMessage.id, thread.id, pageIds);
   console.log(`[LogWatcher] ✅ Publicación guardada (${pageIds.length} páginas).`);
 }
@@ -239,12 +249,12 @@ async function syncExisting(client, channel, log, pub, summaryEmbed, pageEmbeds)
     }
   }
 
-  // Reafirmar privacidad y permisos SIEMPRE — tanto si el hilo se acaba
-  // de crear como si ya existía. Esto corrige también hilos publicados
-  // antes de que este comportamiento existiera, o que algún admin haya
-  // cambiado manualmente en Discord.
+  // Reafirmar privacidad SIEMPRE — tanto si el hilo se acaba de crear
+  // como si ya existía. Esto corrige también hilos publicados antes de
+  // que este comportamiento existiera, o que algún admin haya cambiado
+  // manualmente en Discord. Los permisos de escritura ya están cubiertos
+  // a nivel del canal padre (ensureLogChannelThreadPerms, arriba).
   await ensureThreadIsPrivate(thread);
-  await applyThreadReadOnlyPerms(thread);
 
   // Desarchivar si está archivado
   if (thread.archived) {
@@ -356,38 +366,54 @@ async function ensureThreadIsPrivate(thread) {
 }
 
 /**
- * Aplica permisos de solo-lectura + reacciones al hilo para @everyone.
- * El bot conserva todos sus permisos (no se incluye en el override).
+ * Configura el CANAL PADRE de logs para que sus hilos sean de
+ * solo-lectura para @everyone (leer + reaccionar, sin escribir).
  *
- * Permisos que se DENIEGAN a @everyone:
- *   - SendMessages         → no pueden escribir
- *   - SendMessagesInThreads → ídem dentro de hilos (redundante pero explícito)
+ * IMPORTANTE: los hilos de Discord (ThreadChannel) NO tienen su propio
+ * `permissionOverwrites` — la API de Discord no lo soporta, siempre
+ * heredan los permisos del canal padre. Intentar editar permisos sobre
+ * el hilo directamente (`thread.permissionOverwrites`) falla porque esa
+ * propiedad no existe en un ThreadChannel, sin importar los permisos
+ * del bot. Por eso esto se aplica una única vez sobre el canal de logs,
+ * no por cada hilo.
+ *
+ * Permisos que se DENIEGAN a @everyone en el canal (se heredan en
+ * todos los hilos creados bajo él):
+ *   - SendMessagesInThreads → no pueden escribir dentro de los hilos
  *   - CreatePublicThreads / CreatePrivateThreads → no crean sub-hilos
  *
- * Permisos que se PERMITEN a @everyone (ya los tienen por canal, se confirman):
+ * Permisos que se PERMITEN explícitamente:
  *   - ViewChannel, ReadMessageHistory, AddReactions
  *
- * Requiere que el bot tenga ManageThreads o ManageRoles en el servidor.
+ * No toca SendMessages del canal principal (los logs los publica el
+ * bot ahí; si algún usuario también podía escribir en el canal antes,
+ * sigue pudiendo — solo los HILOS quedan bloqueados).
+ *
+ * Requiere que el bot tenga "Gestionar canales" o "Gestionar permisos"
+ * en el canal/servidor. Se cachea en memoria para no repetir la
+ * llamada a la API en cada log — si cambias el canal con
+ * /setlogchannel, el nuevo canal se configura la primera vez que se
+ * publique un log ahí.
  */
-async function applyThreadReadOnlyPerms(thread) {
+async function ensureLogChannelThreadPerms(channel) {
+  if (_channelThreadPermsConfigured.has(channel.id)) return;
   try {
-    const everyoneId = thread.guild.roles.everyone.id;
-    await thread.permissionOverwrites.edit(everyoneId, {
-      // Permitir explícitamente leer y reaccionar
+    const everyoneId = channel.guild.roles.everyone.id;
+    await channel.permissionOverwrites.edit(everyoneId, {
       [PermissionFlagsBits.ViewChannel]:           true,
       [PermissionFlagsBits.ReadMessageHistory]:    true,
       [PermissionFlagsBits.AddReactions]:          true,
-      // Denegar escritura de cualquier tipo
-      [PermissionFlagsBits.SendMessages]:               false,
-      [PermissionFlagsBits.SendMessagesInThreads]:      false,
-      [PermissionFlagsBits.CreatePublicThreads]:        false,
-      [PermissionFlagsBits.CreatePrivateThreads]:       false,
+      [PermissionFlagsBits.SendMessagesInThreads]: false,
+      [PermissionFlagsBits.CreatePublicThreads]:   false,
+      [PermissionFlagsBits.CreatePrivateThreads]:  false,
     });
-    console.log(`[LogWatcher] 🔒 Permisos solo-lectura aplicados al hilo ${thread.id}`);
+    _channelThreadPermsConfigured.add(channel.id);
+    console.log(`[LogWatcher] 🔒 Canal ${channel.id} configurado: hilos de solo-lectura para @everyone`);
   } catch (err) {
-    // No fatal — el hilo sigue funcionando, solo queda abierto a escritura
-    console.warn('[LogWatcher] ⚠️ No se pudieron aplicar permisos al hilo:', err.message);
-    console.warn('[LogWatcher]    Asegúrate de que el bot tenga el permiso "Gestionar hilos" en el servidor.');
+    // No fatal — los hilos se siguen creando y publicando, solo quedan
+    // abiertos a escritura hasta que se resuelva el permiso del bot.
+    console.warn('[LogWatcher] ⚠️ No se pudieron configurar los permisos del canal:', err.message);
+    console.warn('[LogWatcher]    Asegúrate de que el bot tenga "Gestionar canales" en el canal de logs.');
   }
 }
 
