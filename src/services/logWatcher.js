@@ -14,7 +14,7 @@ import { supabase } from './supabase.js';
 import { getConfigValue, CONFIG_KEYS } from './botConfig.js';
 import { buildLogSummaryEmbed, buildLogPageEmbeds } from '../utils/logEmbeds.js';
 import { getPublication, upsertPublication } from './logPublication.js';
-import { PermissionFlagsBits } from 'discord.js';
+import { PermissionFlagsBits, MessageFlags } from 'discord.js';
 
 const SITE_URL = process.env.SITE_URL ?? '';
 
@@ -154,10 +154,18 @@ async function syncLogPublication(client, log, mode) {
 
 /** Publica desde cero: resumen → hilo → páginas. */
 async function publishFresh(client, channel, log, summaryEmbed, pageEmbeds) {
-  // 1. Enviar el embed resumen al canal principal
+  // 1. Enviar el embed resumen al canal principal.
+  // Content "@everyone" + flag SuppressNotifications = el mismo efecto que
+  // escribir "@silent @everyone" a mano en Discord: menciona/marca el rol
+  // para quien mire el canal, pero no dispara notificación push ni sonido.
   let summaryMessage;
   try {
-    summaryMessage = await channel.send({ embeds: [summaryEmbed] });
+    summaryMessage = await channel.send({
+      content: '@everyone',
+      embeds: [summaryEmbed],
+      flags: MessageFlags.SuppressNotifications,
+      allowedMentions: { parse: ['everyone'] },
+    });
     console.log(`[LogWatcher] ✅ Resumen enviado (msg: ${summaryMessage.id})`);
   } catch (err) {
     console.error('[LogWatcher] ❌ Error enviando resumen:', err.message);
