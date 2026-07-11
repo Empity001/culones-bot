@@ -6,15 +6,27 @@ import { createCanvas, loadImage } from '@napi-rs/canvas';
 import axios from 'axios';
 import { ensureFonts, FONT } from './fonts.js';
 import { fillTextWithEmoji } from './emojiText.js';
+import { getRenderPalette, themeRgba } from '../services/siteTheme.js';
 
 // ── Tokens de diseño ─────────────────────────────────────────────────────────
-const BG_COLOR    = '#0c0a14';
-const BORDER_COLOR = 'rgba(255,255,255,0.08)';
-const CYAN        = '#4dd4e8';
-const GOLD        = '#f3b73a';
-const INK_100     = '#f4f1fb';
-const INK_400     = '#9a92b8';
-const INK_600     = 'rgba(255,255,255,0.35)';
+let BG_COLOR = '#090612';
+let BORDER_COLOR = 'rgba(169,133,255,0.18)';
+let CYAN = '#a985ff';
+let GOLD = '#d6b56f';
+let INK_100 = '#f6f1ff';
+let INK_400 = '#aaa2c1';
+let INK_600 = 'rgba(220,208,244,0.52)';
+
+function applyRenderTheme() {
+  const theme = getRenderPalette();
+  BG_COLOR = theme.bg;
+  BORDER_COLOR = themeRgba(theme.primary, 0.18);
+  CYAN = theme.primary;
+  GOLD = theme.accent;
+  INK_100 = theme.text;
+  INK_400 = theme.muted;
+  INK_600 = themeRgba(theme.muted, 0.52);
+}
 
 const CANVAS_W    = 720;
 const PADDING     = 20;
@@ -81,6 +93,7 @@ function roundRect(ctx, x, y, w, h, r) {
  * @returns {Buffer}
  */
 export async function renderWeaponCatalogImage(weapons, filterLabel = 'Todas', serverName = 'Culones RPG') {
+  applyRenderTheme();
   ensureFonts();
 
   // Pre-descargar imágenes en paralelo
@@ -120,7 +133,7 @@ export async function renderWeaponCatalogImage(weapons, filterLabel = 'Todas', s
   ctx.fillRect(0, 0, CANVAS_W, canvas.height);
 
   // ── Header ────────────────────────────────────────────────────────────────
-  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fillStyle = 'rgba(124,92,255,0.10)';
   ctx.fillRect(0, 0, CANVAS_W, HEADER_H);
   ctx.strokeStyle = `${CYAN}66`;
   ctx.lineWidth   = 1;
@@ -183,7 +196,7 @@ export async function renderWeaponCatalogImage(weapons, filterLabel = 'Todas', s
       const cy  = y + row * GRID_ROW_H;
 
       // Fondo carta
-      ctx.fillStyle = 'rgba(255,255,255,0.035)';
+      ctx.fillStyle = 'rgba(143,105,230,0.075)';
       roundRect(ctx, cx, cy, CARD_W, CARD_H, 8);
       ctx.fill();
 

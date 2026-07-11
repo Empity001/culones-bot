@@ -5,17 +5,31 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import axios from 'axios';
 import { ensureFonts, FONT } from './fonts.js';
+import { getRenderPalette, themeRgba } from '../services/siteTheme.js';
 
 // ── Tokens de diseño ─────────────────────────────────────────────────────────
-const BG_COLOR     = '#0c0a14';
-const BORDER_COLOR = 'rgba(255,255,255,0.08)';
-const GOLD         = '#f3b73a';
-const CYAN         = '#4dd4e8';
-const MAGENTA      = '#ff3d8e';
-const GREEN        = '#38e07a';
-const INK_100      = '#f4f1fb';
-const INK_400      = '#9a92b8';
-const INK_600      = 'rgba(255,255,255,0.35)';
+let BG_COLOR = '#090612';
+let BORDER_COLOR = 'rgba(169,133,255,0.18)';
+let GOLD = '#d6b56f';
+let CYAN = '#a985ff';
+let MAGENTA = '#ec72d3';
+let GREEN = '#38e07a';
+let INK_100 = '#f6f1ff';
+let INK_400 = '#aaa2c1';
+let INK_600 = 'rgba(220,208,244,0.52)';
+
+function applyRenderTheme() {
+  const theme = getRenderPalette();
+  BG_COLOR = theme.bg;
+  BORDER_COLOR = themeRgba(theme.primary, 0.18);
+  GOLD = theme.accent;
+  CYAN = theme.primary;
+  MAGENTA = theme.event;
+  GREEN = theme.confirmation;
+  INK_100 = theme.text;
+  INK_400 = theme.muted;
+  INK_600 = themeRgba(theme.muted, 0.52);
+}
 
 const CANVAS_W       = 640;
 const PADDING        = 20;
@@ -233,6 +247,7 @@ function getRecipeBoxLayout(method) {
 }
 
 export async function renderWeaponRankImage({ weapon, category, type, rank }) {
+  applyRenderTheme();
   ensureFonts();
 
   const safeImageUrl = rank.image_url || weapon.image_url;
@@ -312,7 +327,7 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
   if (type) {
     const label = ` ${type.label} `;
     const w     = ctx.measureText(label).width + 10;
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillStyle = 'rgba(169,133,255,0.18)';
     roundRect(ctx, badgeX, badgeY, w, 20, 10);
     ctx.fill();
     ctx.fillStyle    = INK_100;
@@ -417,7 +432,7 @@ export async function renderWeaponRankImage({ weapon, category, type, rank }) {
       if (abStats.length > 0) cardH += Math.ceil(abStats.length / 2) * 18 + 4;
       cardH += 8;
 
-      ctx.fillStyle = 'rgba(255,255,255,0.035)';
+      ctx.fillStyle = 'rgba(143,105,230,0.075)';
       roundRect(ctx, PADDING, cardTop, contentW, cardH, 8);
       ctx.fill();
 

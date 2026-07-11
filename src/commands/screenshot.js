@@ -11,16 +11,16 @@
 // Permisos:
 //   • Cualquier miembro puede ejecutar el comando y recibir la imagen en el
 //     canal donde lo escribe.
-//   • La opción `canal` (redirigir a otro canal) SOLO la procesan las IDs
-//     de AUTHORIZED_USER_IDS; al resto se les ignora silenciosamente y la
-//     imagen se envía al canal actual.
+//   • La opción `canal` solo se acepta para el propietario, miembros con
+//     Administrator o el rol administrativo configurado para la web.
 
 import {
   SlashCommandBuilder,
   ChannelType,
   AttachmentBuilder,
+  PermissionFlagsBits,
 } from 'discord.js';
-import { isAuthorized }                      from '../utils/isAuthorized.js';
+import { canUseAdminFeature }                from '../utils/permissions.js';
 import { buildErrorEmbed }                   from '../utils/embeds.js';
 import { loadTierlistData, groupByRow, TIER_COLUMNS } from '../services/tierlist.js';
 import { renderTierlistImage }               from '../utils/renderTierlist.js';
@@ -33,6 +33,7 @@ import { renderKitsImage }                   from '../utils/renderKits.js';
 import { loadRecentLogs, loadLogById }       from '../services/logs.js';
 import { renderLogsImage }                   from '../utils/renderLogs.js';
 import { renderLogDetailImage }              from '../utils/renderLogDetail.js';
+import { refreshRenderPalette }               from '../services/siteTheme.js';
 
 // ── Definición del comando ────────────────────────────────────────────────────
 export const data = new SlashCommandBuilder()
@@ -219,17 +220,16 @@ export async function execute(interaction) {
  * Si el usuario pasó `canal` pero NO está autorizado, ignora la opción
  * silenciosamente y devuelve el canal actual (sin error visible).
  */
-function resolveTargetChannel(interaction) {
+async function resolveTargetChannel(interaction) {
   const requested = interaction.options.getChannel('canal');
   if (!requested) return interaction.channel;
-  if (isAuthorized(interaction.user.id)) return requested;
-  // Usuario normal intentó usar `canal` → lo ignoramos, canal actual
+  if (await canUseAdminFeature(interaction)) return requested;
   return interaction.channel;
 }
 
 async function checkChannelPerms(interaction, targetChannel) {
   const perms = targetChannel.permissionsFor(interaction.guild.members.me);
-  if (!perms?.has('SendMessages') || !perms?.has('AttachFiles')) {
+  if (!perms?.has(PermissionFlagsBits.SendMessages) || !perms?.has(PermissionFlagsBits.AttachFiles)) {
     await interaction.editReply({
       embeds: [buildErrorEmbed(`No tengo permisos para enviar archivos en ${targetChannel}.`)],
     });
@@ -251,9 +251,10 @@ function requestAnnouncement(interaction, description) {
 // ── /screenshot tierlist ──────────────────────────────────────────────────────
 async function handleTierlist(interaction) {
   await interaction.deferReply({ ephemeral: true });
+  await refreshRenderPalette();
 
   const columnKey     = interaction.options.getString('columna');
-  const targetChannel = resolveTargetChannel(interaction);
+  const targetChannel = await resolveTargetChannel(interaction);
 
   if (!(await checkChannelPerms(interaction, targetChannel))) return;
 
@@ -276,6 +277,7 @@ async function handleTierlist(interaction) {
       await targetChannel.send({
         content: `${requestAnnouncement(interaction, 'la tierlist completa (Arma / Sub-arma / Accesorio)')}\n📊 **TIERLIST COMPLETA** · Arma / Sub-arma / Accesorio`,
         files:   [attachment],
+        allowedMentions: { users: [interaction.user.id], parse: [] },
       });
       await interaction.deleteReply().catch(() => {});
       return;
@@ -290,6 +292,7 @@ async function handleTierlist(interaction) {
     await targetChannel.send({
       content: `${requestAnnouncement(interaction, `la tierlist de **${column.label}**`)}\n📊 **TIERLIST · ${column.label.toUpperCase()}**`,
       files:   [attachment],
+      allowedMentions: { users: [interaction.user.id], parse: [] },
     });
     await interaction.deleteReply().catch(() => {});
 
@@ -304,8 +307,9 @@ async function handleTierlist(interaction) {
 // ── /screenshot guias ─────────────────────────────────────────────────────────
 async function handleWeaponCatalog(interaction) {
   await interaction.deferReply({ ephemeral: true });
+  await refreshRenderPalette();
 
-  const targetChannel = resolveTargetChannel(interaction);
+  const targetChannel = await resolveTargetChannel(interaction);
   const tipoFiltro    = interaction.options.getString('filtro');
   const valorFiltro   = interaction.options.getString('valor');
 
@@ -337,6 +341,7 @@ async function handleWeaponCatalog(interaction) {
     await targetChannel.send({
       content: `${requestAnnouncement(interaction, `el catálogo de Guías (${filterLabel}, ${weapons.length} arma${weapons.length !== 1 ? 's' : ''})`)}\n⚔️ **GUÍAS · CATÁLOGO** · ${filterLabel} (${weapons.length} arma${weapons.length !== 1 ? 's' : ''})`,
       files:   [attachment],
+      allowedMentions: { users: [interaction.user.id], parse: [] },
     });
     await interaction.deleteReply().catch(() => {});
 
@@ -351,9 +356,10 @@ async function handleWeaponCatalog(interaction) {
 // ── /screenshot guia ───────────────────────────────────────────────────────────
 async function handleWeapon(interaction) {
   await interaction.deferReply({ ephemeral: true });
+  await refreshRenderPalette();
 
   const weaponId      = interaction.options.getString('nombre');
-  const targetChannel = resolveTargetChannel(interaction);
+  const targetChannel = await resolveTargetChannel(interaction);
 
   if (!(await checkChannelPerms(interaction, targetChannel))) return;
 
@@ -380,10 +386,18 @@ async function handleWeapon(interaction) {
       attachments.push(new AttachmentBuilder(pngBuffer, { name: `arma-${weapon.id}-${rank.id}.png` }));
     }
 
-    await targetChannel.send({
-      content: `${requestAnnouncement(interaction, `la guía de **${weapon.name}**`)}\n⚔️ **GUÍAS · ${weapon.name.toUpperCase()}** · ${ranks.length} rango${ranks.length > 1 ? 's' : ''}`,
-      files:   attachments,
-    });
+    const firstContent = `${requestAnnouncement(interaction, `la guía de **${weapon.name}**`)}
+⚔️ **GUÍAS · ${weapon.name.toUpperCase()}** · ${ranks.length} rango${ranks.length > 1 ? 's' : ''}`;
+    for (let i = 0; i < attachments.length; i += 10) {
+      const chunk = attachments.slice(i, i + 10);
+      await targetChannel.send({
+        content: i === 0
+          ? firstContent
+          : `> Continuación de la guía **${weapon.name}** solicitada por ${interaction.user}.`,
+        files: chunk,
+        allowedMentions: { users: i === 0 ? [interaction.user.id] : [], parse: [] },
+      });
+    }
     await interaction.deleteReply().catch(() => {});
 
   } catch (err) {
@@ -397,8 +411,9 @@ async function handleWeapon(interaction) {
 // ── /screenshot kits ───────────────────────────────────────────────────────────
 async function handleKits(interaction) {
   await interaction.deferReply({ ephemeral: true });
+  await refreshRenderPalette();
 
-  const targetChannel = resolveTargetChannel(interaction);
+  const targetChannel = await resolveTargetChannel(interaction);
 
   if (!(await checkChannelPerms(interaction, targetChannel))) return;
 
@@ -411,6 +426,7 @@ async function handleKits(interaction) {
     await targetChannel.send({
       content: `${requestAnnouncement(interaction, 'los kits recomendados')}\n🎒 **KITS RECOMENDADOS** (${kits.length} kit${kits.length !== 1 ? 's' : ''})`,
       files:   [attachment],
+      allowedMentions: { users: [interaction.user.id], parse: [] },
     });
     await interaction.deleteReply().catch(() => {});
 
@@ -425,8 +441,9 @@ async function handleKits(interaction) {
 // ── /screenshot logs ──────────────────────────────────────────────────────────
 async function handleLogs(interaction) {
   await interaction.deferReply({ ephemeral: true });
+  await refreshRenderPalette();
 
-  const targetChannel = resolveTargetChannel(interaction);
+  const targetChannel = await resolveTargetChannel(interaction);
   const logId         = interaction.options.getString('ver');
   const limit         = interaction.options.getInteger('cantidad') ?? 10;
 
@@ -442,6 +459,7 @@ async function handleLogs(interaction) {
       await targetChannel.send({
         content: `${requestAnnouncement(interaction, `el detalle del log **${log.title}**`)}\n📜 **LOG · ${log.title.toUpperCase()}**`,
         files:   [attachment],
+        allowedMentions: { users: [interaction.user.id], parse: [] },
       });
       await interaction.deleteReply().catch(() => {});
       return;
@@ -455,6 +473,7 @@ async function handleLogs(interaction) {
     await targetChannel.send({
       content: `${requestAnnouncement(interaction, 'una captura de los Logs recientes')}\n📜 **LOGS RECIENTES** (últimos ${logs.length})`,
       files:   [attachment],
+      allowedMentions: { users: [interaction.user.id], parse: [] },
     });
     await interaction.deleteReply().catch(() => {});
 

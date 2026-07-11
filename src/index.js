@@ -3,7 +3,7 @@
 // Carga comandos y eventos automáticamente desde sus carpetas
 // — para agregar algo nuevo, solo crea el archivo, no hay que tocar este archivo.
 
-import { Client, GatewayIntentBits, Collection } from 'discord.js';
+import { Client, GatewayIntentBits, Collection, Partials } from 'discord.js';
 import { readdirSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
@@ -15,11 +15,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Cliente de Discord ─────────────────────────────────────────────────────────
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,      // necesario para fetch y edit de mensajes en hilos
-    GatewayIntentBits.MessageContent,     // necesario para leer contenido de mensajes del bot
-  ],
+  // GuildMessages se usa únicamente para detectar eliminaciones y recuperar
+  // publicaciones propias. No se solicita MessageContent.
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  partials: [Partials.Channel, Partials.Message],
 });
 
 // Colección de comandos disponibles

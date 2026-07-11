@@ -277,7 +277,7 @@ function countWrappedLines(ctx, text, maxWidth) {
 
 export function measureLibreTitleHeight(ctx, libre, maxWidth, fontSans) {
   ctx.font = `bold 13px ${fontSans}`;
-  const titleLineCount = countWrappedLines(ctx, libre?.name || 'Bloque libre', maxWidth);
+  const titleLineCount = countWrappedLines(ctx, libre?.name || 'Extra', maxWidth);
   return 8 + titleLineCount * 16 + 8;
 }
 

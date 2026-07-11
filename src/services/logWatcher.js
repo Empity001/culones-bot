@@ -1,572 +1,354 @@
-// src/services/logWatcher.js
-// =========================================================
-// Escucha INSERT/UPDATE en `logs` e INSERT en discord_deletion_queue
-// vía Supabase Realtime:
-//   INSERT en logs                  → publica resumen + hilo + páginas
-//   UPDATE en logs                  → edita resumen + sincroniza páginas
-//   INSERT en discord_deletion_queue → borra el mensaje resumen y el hilo
-//
-// La persistencia de IDs de Discord vive en log_discord_publications
-// (tabla separada), nunca en `logs`, para evitar que guardar IDs
-// dispare este watcher en loop.
-//
-// El borrado usa una tabla-cola (discord_deletion_queue) en vez de
-// escuchar el DELETE en cascada de log_discord_publications: los
-// eventos DELETE de Realtime dependen de que RLS deje pasar el "old
-// row", y en la práctica eso llegaba vacío. delete_log() ahora
-// encola los IDs de Discord con un INSERT justo antes de borrar el
-// log — los eventos INSERT sí traen siempre la fila completa (el
-// mismo mecanismo, ya probado, que usa la publicación de logs nuevos).
-// =========================================================
-
+import { PermissionFlagsBits } from 'discord.js';
+import { createHash } from 'node:crypto';
 import { supabase } from './supabase.js';
-import { getConfigValue, CONFIG_KEYS } from './botConfig.js';
-import { buildLogSummaryEmbed, buildLogPageEmbeds } from '../utils/logEmbeds.js';
-import { getPublication, upsertPublication } from './logPublication.js';
-import { PermissionFlagsBits, MessageFlags } from 'discord.js';
+import { getGuildConfig } from './botConfig.js';
+import { getPublication, upsertPublication, deletePublication } from './logPublication.js';
+import { buildLogMessageSpecs } from '../utils/logMessages.js';
+import { suppressDiscordDeletion } from './deletionSuppressor.js';
 
-const SITE_URL = process.env.SITE_URL ?? '';
-
-// Guard contra procesamiento simultáneo del mismo log
-// (Supabase Realtime puede entregar varios eventos seguidos)
-const _processing = new Set();
-
-// Mismo guard, pero para el flujo de borrado (evento separado,
-// sobre otra tabla — clave por id de fila de la cola, no log_id).
-const _processingDeletions = new Set();
-
-// Canales de logs para los que ya se configuraron los permisos de
-// hilo (SendMessagesInThreads etc.) — evita repetir la llamada a la
-// API en cada INSERT/UPDATE una vez que el canal quedó configurado.
-const _channelThreadPermsConfigured = new Set();
+const syncStates = new Map();
+const deletionLocks = new Set();
+const configuredChannels = new Set();
+let watcherChannel = null;
 
 export function startLogWatcher(client) {
-  supabase
-    .channel('bot-log-watcher')
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'logs' },
-      async (payload) => {
-        const log = payload.new;
-        console.log(`[LogWatcher] INSERT detectado: "${log.title}" (${log.id})`);
-        if (_processing.has(log.id)) {
-          console.log(`[LogWatcher] Ya procesando ${log.id}, ignorando evento duplicado.`);
-          return;
-        }
-        _processing.add(log.id);
-        try {
-          // Esperar un momento para que mobs/items lleguen a Supabase
-          await delay(2500);
-          await syncLogPublication(client, log, 'insert');
-        } catch (err) {
-          console.error(`[LogWatcher] Error en INSERT de "${log.title}":`, err.message);
-        } finally {
-          _processing.delete(log.id);
-        }
-      }
-    )
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'logs' },
-      async (payload) => {
-        const log = payload.new;
-        console.log(`[LogWatcher] UPDATE detectado: "${log.title}" (${log.id})`);
-        if (_processing.has(log.id)) {
-          console.log(`[LogWatcher] Ya procesando ${log.id}, ignorando evento duplicado.`);
-          return;
-        }
-        _processing.add(log.id);
-        try {
-          await syncLogPublication(client, log, 'update');
-        } catch (err) {
-          console.error(`[LogWatcher] Error en UPDATE de "${log.title}":`, err.message);
-        } finally {
-          _processing.delete(log.id);
-        }
-      }
-    )
-    // El log ya fue borrado de `logs` para cuando llega este evento —
-    // por eso escuchamos un INSERT en discord_deletion_queue en vez de
-    // un DELETE en logs/log_discord_publications: delete_log() encola
-    // ahí los IDs de Discord justo antes de borrar, y un INSERT trae
-    // siempre la fila completa (a diferencia de un DELETE, que depende
-    // de RLS para incluir el "old row" y en la práctica llegaba vacío).
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'discord_deletion_queue' },
-      async (payload) => {
-        const row = payload.new;
-        console.log(`[LogWatcher] Borrado encolado para log ${row.log_id} — limpiando Discord.`);
-        await processDeletionQueueRow(client, row);
-      }
-    )
-    .subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        console.log('[LogWatcher] ✅ Suscrito a logs (INSERT + UPDATE) y a la cola de borrados (INSERT)');
-      } else {
-        console.log('[LogWatcher] Estado:', status);
-      }
-    });
+  if (watcherChannel) return watcherChannel;
+  watcherChannel = supabase
+    .channel('bot-log-watcher-v3')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'logs' }, payload => {
+      enqueueLogSync(client, payload.new, 2200);
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'logs' }, payload => {
+      enqueueLogSync(client, payload.new, 1200);
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'discord_deletion_queue' }, payload => {
+      void processDeletionQueueRow(client, payload.new);
+    })
+    .subscribe(status => console.log('[LogWatcher] Estado:', status));
 
-  // Barrido inicial: si el bot estuvo apagado cuando se borró un log,
-  // la fila quedó esperando en la cola — la procesamos ahora en vez
-  // de perder esa limpieza para siempre.
-  sweepPendingDeletions(client);
+  void sweepPendingDeletions(client);
+  return watcherChannel;
 }
 
-/** Procesa una fila de la cola de borrados: limpia Discord y luego la retira de la cola. */
-async function processDeletionQueueRow(client, row) {
-  if (_processingDeletions.has(row.id)) {
-    console.log(`[LogWatcher] Ya procesando la fila de borrado ${row.id}, ignorando evento duplicado.`);
-    return;
-  }
-  _processingDeletions.add(row.id);
+function enqueueLogSync(client, log, waitMs = 0) {
+  if (!log?.id) return;
+  const current = syncStates.get(log.id) || { running: false, dirty: false, log: null, waitMs: 0 };
+  current.log = log;
+  current.dirty = true;
+  current.waitMs = Math.max(current.waitMs || 0, Number(waitMs) || 0);
+  syncStates.set(log.id, current);
+  if (!current.running) void runSyncLoop(client, log.id);
+}
+
+
+export async function requestLogSyncById(client, logId, waitMs = 0) {
+  if (!logId) return false;
+  const { data: log, error } = await supabase.from('logs').select('*').eq('id', logId).maybeSingle();
+  if (error) throw new Error(`[LogWatcher] No se pudo cargar el Log ${logId}: ${error.message}`);
+  if (!log) return false;
+  enqueueLogSync(client, log, waitMs);
+  return true;
+}
+
+async function runSyncLoop(client, logId) {
+  const state = syncStates.get(logId);
+  if (!state || state.running) return;
+  state.running = true;
   try {
-    await deleteDiscordPublication(client, row);
-  } catch (err) {
-    console.error(`[LogWatcher] Error limpiando Discord para el log ${row.log_id}:`, err.message);
+    while (state.dirty) {
+      state.dirty = false;
+      const log = state.log;
+      if (state.waitMs > 0) {
+        const waitMs = state.waitMs;
+        state.waitMs = 0;
+        await delay(waitMs);
+      }
+      try {
+        await syncLogPublication(client, log);
+      } catch (error) {
+        console.error(`[LogWatcher] Error completo sincronizando ${logId}:`, error);
+      }
+    }
   } finally {
-    _processingDeletions.delete(row.id);
-  }
-
-  // Limpieza de la cola — si falla, no es grave (la fila solo queda
-  // huérfana ahí, no vuelve a intentar borrar nada en Discord porque
-  // Realtime no reenvía INSERTs ya entregados).
-  const { error } = await supabase.from('discord_deletion_queue').delete().eq('id', row.id);
-  if (error) {
-    console.warn(`[LogWatcher] ⚠️ No se pudo limpiar la fila ${row.id} de discord_deletion_queue:`, error.message);
+    state.running = false;
+    if (!state.dirty) syncStates.delete(logId);
   }
 }
 
-/** Al iniciar el bot, procesa cualquier borrado que haya quedado pendiente mientras estaba apagado. */
-async function sweepPendingDeletions(client) {
-  const { data, error } = await supabase.from('discord_deletion_queue').select('*');
-  if (error) {
-    console.warn('[LogWatcher] ⚠️ No se pudo revisar discord_deletion_queue al iniciar:', error.message);
-    return;
-  }
-  if (!data || data.length === 0) return;
+function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
-  console.log(`[LogWatcher] 🧹 ${data.length} borrado(s) pendiente(s) encontrados al iniciar — procesando.`);
-  for (const row of data) {
-    await processDeletionQueueRow(client, row);
-  }
+function isArchiveDurationError(error) {
+  return Number(error?.code) === 50035
+    || /auto[_ -]?archive|archive duration/i.test(String(error?.message || ''));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+async function startReadableLogThread(summary, name) {
+  const durations = [...new Set([
+    10080,
+    Number(summary.channel?.defaultAutoArchiveDuration) || null,
+    4320,
+    1440,
+    60,
+  ].filter(Boolean))];
+  let lastError = null;
+  for (const duration of durations) {
+    try {
+      return await summary.startThread({ name, autoArchiveDuration: duration });
+    } catch (error) {
+      lastError = error;
+      if (!isArchiveDurationError(error)) throw error;
+      console.warn(`[LogWatcher] El archivado de ${duration} minutos no está disponible; probando otro valor.`);
+    }
+  }
+  throw lastError || new Error('No se pudo crear el hilo del Log.');
 }
 
-/** Carga todos los datos del log desde Supabase. */
 async function loadLogData(log) {
   const [catRes, mobsRes, itemsRes] = await Promise.all([
-    supabase.from('categories').select('*').eq('slug', log.category).single(),
+    supabase.from('categories').select('*').eq('slug', log.category).maybeSingle(),
     supabase.from('log_mobs').select('*').eq('log_id', log.id).order('sort_order', { ascending: true }),
     supabase.from('log_items').select('*').eq('log_id', log.id).order('sort_order', { ascending: true }),
   ]);
-
-  return {
-    category: catRes.data ?? null,
-    mobs:     mobsRes.data  ?? [],
-    items:    itemsRes.data ?? [],
-  };
+  if (mobsRes.error) throw new Error(mobsRes.error.message);
+  if (itemsRes.error) throw new Error(itemsRes.error.message);
+  return { category: catRes.data || null, mobs: mobsRes.data || [], items: itemsRes.data || [] };
 }
 
-/** Obtiene el canal de logs configurado. */
 async function getLogChannel(client) {
-  const channelId = await getConfigValue(CONFIG_KEYS.LOG_CHANNEL_ID);
-  if (!channelId) {
-    console.warn('[LogWatcher] No hay canal configurado. Usa /setlogchannel.');
+  const cfg = await getGuildConfig();
+  if (!cfg?.log_channel_id) {
+    console.warn('[LogWatcher] No hay canal de Logs. Usa /setlogchannel.');
     return null;
   }
-  const channel = await client.channels.fetch(channelId).catch((err) => {
-    console.warn(`[LogWatcher] No se pudo obtener el canal ${channelId}:`, err.message);
+  return client.channels.fetch(cfg.log_channel_id).catch(error => {
+    console.warn(`[LogWatcher] No se pudo abrir ${cfg.log_channel_id}:`, error.message);
     return null;
   });
-  return channel;
 }
 
-/**
- * Borra de Discord todo lo relacionado a un log ya eliminado:
- * el hilo (con todas sus páginas, que se borran solas al borrar
- * el hilo) y el mensaje resumen en el canal principal.
- *
- * `pub` es una fila de discord_deletion_queue — delete_log() la
- * encoló ANTES de borrar el log, así que trae channel_id,
- * summary_message_id y thread_id siempre completos (a diferencia
- * de intentar leerlos de un evento DELETE, que depende de RLS
- * para incluir el "old row" y no era confiable).
- *
- * Cada borrado va en su propio try/catch: si un admin ya borró el
- * mensaje o el hilo a mano en Discord, o si el canal fue eliminado,
- * eso no debe impedir borrar lo demás.
- */
-async function deleteDiscordPublication(client, pub) {
-  // 1. Borrar el hilo (esto se lleva todas las páginas con él).
-  if (pub.thread_id) {
-    try {
-      const thread = await client.channels.fetch(pub.thread_id);
-      await thread.delete();
-      console.log(`[LogWatcher] 🗑️  Hilo ${pub.thread_id} eliminado.`);
-    } catch (err) {
-      console.warn(`[LogWatcher] ⚠️ No se pudo borrar el hilo ${pub.thread_id} (¿ya no existe?):`, err.message);
-    }
-  }
-
-  // 2. Borrar el mensaje resumen del canal principal.
-  if (pub.channel_id && pub.summary_message_id) {
-    try {
-      const channel = await client.channels.fetch(pub.channel_id);
-      const message = await channel.messages.fetch(pub.summary_message_id);
-      await message.delete();
-      console.log(`[LogWatcher] 🗑️  Resumen ${pub.summary_message_id} eliminado.`);
-    } catch (err) {
-      console.warn(`[LogWatcher] ⚠️ No se pudo borrar el resumen ${pub.summary_message_id} (¿ya no existe?):`, err.message);
-    }
-  } else {
-    console.warn(`[LogWatcher] ⚠️ Publicación de ${pub.log_id} sin channel_id/summary_message_id — nada que borrar en el canal principal.`);
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// syncLogPublication — núcleo del sistema
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Publica o sincroniza un log en Discord.
- * @param {Client} client
- * @param {object} log     - fila de la tabla logs
- * @param {'insert'|'update'} mode
- */
-async function syncLogPublication(client, log, mode) {
+async function syncLogPublication(client, log) {
   const channel = await getLogChannel(client);
-  if (!channel) return;
-
-  // Configura el canal para que sus hilos sean de solo lectura para
-  // @everyone. Los hilos de Discord NO tienen permisos propios — siempre
-  // heredan del canal padre — así que esto se hace una vez por canal,
-  // no por hilo.
+  if (!channel?.isTextBased?.()) return;
   await ensureLogChannelThreadPerms(channel);
-
   const { category, mobs, items } = await loadLogData(log);
-  const summaryEmbed = buildLogSummaryEmbed(log, category, mobs, items, SITE_URL);
-  const pageEmbeds   = buildLogPageEmbeds(log, category, mobs, items, SITE_URL);
-
-  console.log(`[LogWatcher] "${log.title}": generadas ${pageEmbeds.length} página(s).`);
-
-  const pub = await getPublication(log.id);
-
-  // ── Modo INSERT o publicación no existe ──────────────────────────────────
-  if (mode === 'insert' || !pub) {
-    await publishFresh(client, channel, log, summaryEmbed, pageEmbeds);
+  const specs = await buildLogMessageSpecs(log, category, mobs, items);
+  const contentHash = createHash('sha256').update(JSON.stringify({ log, category, mobs, items })).digest('hex');
+  const publication = await getPublication(log.id);
+  if (!publication) {
+    await publishFresh(channel, log, specs, contentHash);
     return;
   }
-
-  // ── Modo UPDATE con publicación existente ────────────────────────────────
-  await syncExisting(client, channel, log, pub, summaryEmbed, pageEmbeds);
+  await syncExisting(client, channel, log, publication, specs, contentHash);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+async function sendSpec(target, spec) {
+  return target.send({
+    embeds: spec.embeds,
+    files: spec.files || [],
+    allowedMentions: { parse: [] },
+  });
+}
 
-/** Publica desde cero: resumen → hilo → páginas. */
-async function publishFresh(client, channel, log, summaryEmbed, pageEmbeds) {
-  // 1. Enviar el embed resumen al canal principal.
-  // Content "@everyone" + flag SuppressNotifications = el mismo efecto que
-  // escribir "@silent @everyone" a mano en Discord: menciona/marca el rol
-  // para quien mire el canal, pero no dispara notificación push ni sonido.
-  let summaryMessage;
-  try {
-    summaryMessage = await channel.send({
-      content: '@everyone',
-      embeds: [summaryEmbed],
-      flags: MessageFlags.SuppressNotifications,
-      allowedMentions: { parse: ['everyone'] },
-    });
-    console.log(`[LogWatcher] ✅ Resumen enviado (msg: ${summaryMessage.id})`);
-  } catch (err) {
-    console.error('[LogWatcher] ❌ Error enviando resumen:', err.message);
-    return;
-  }
+async function editSpec(message, spec) {
+  return message.edit({
+    embeds: spec.embeds,
+    files: spec.files || [],
+    attachments: [],
+    allowedMentions: { parse: [] },
+  });
+}
 
-  // 2. Crear hilo privado desde el mensaje resumen
-  // `invitable: false` → solo el bot (y roles con ManageThreads) pueden invitar
-  const threadName = log.title.slice(0, 100); // Discord: max 100 chars para nombre de hilo
+async function publishFresh(channel, log, specs, contentHash) {
+  const summary = await sendSpec(channel, specs.summary);
+  console.log(`[LogWatcher] ✅ Resumen creado para “${log.title}”: ${summary.id}`);
   let thread;
   try {
-    thread = await summaryMessage.startThread({
-      name:                threadName,
-      autoArchiveDuration: 10080, // 7 días
-      invitable:           false, // hilo privado: solo el bot puede añadir miembros
-    });
-    console.log(`[LogWatcher] ✅ Hilo privado creado: "${threadName}" (${thread.id})`);
-  } catch (err) {
-    console.error('[LogWatcher] ❌ Error creando hilo:', err.message);
-    await upsertPublication(log.id, channel.id, summaryMessage.id, null, []);
-    return;
+    thread = await startReadableLogThread(summary, String(log.title || 'Log').slice(0, 100));
+  } catch (error) {
+    suppressDiscordDeletion(summary.id);
+    await summary.delete().catch(() => {});
+    throw new Error(`No se pudo crear el hilo: ${error.message}`);
   }
 
-  // 3. Enviar páginas dentro del hilo (una por mensaje)
-  // (Los permisos de solo-lectura ya se configuraron a nivel del canal
-  // padre en ensureLogChannelThreadPerms — los hilos los heredan.)
-  const pageIds = await sendPages(thread, pageEmbeds, log.title);
-
-  // 4. Mensaje final con enlace a la web
-  await sendFinalLinkMessage(thread, log);
-
-  // 5. Persistir
-  await upsertPublication(log.id, channel.id, summaryMessage.id, thread.id, pageIds);
-  console.log(`[LogWatcher] ✅ Publicación guardada (${pageIds.length} páginas).`);
+  const messageMap = { summary: summary.id };
+  for (const spec of specs.entries) {
+    const message = await sendSpec(thread, spec);
+    messageMap[spec.key] = message.id;
+  }
+  await upsertPublication({
+    logId: log.id,
+    channelId: channel.id,
+    summaryMessageId: summary.id,
+    threadId: thread.id,
+    messageMap,
+    messageOrder: specs.entries.map(spec => spec.key),
+    contentHash,
+  });
+  console.log(`[LogWatcher] ✅ “${log.title}” publicado con ${specs.entries.length} mensajes internos.`);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+function normalizeLegacyMap(publication, specs) {
+  const map = publication?.message_map && typeof publication.message_map === 'object' && !Array.isArray(publication.message_map)
+    ? { ...publication.message_map }
+    : {};
+  if (!map.summary && publication?.summary_message_id) map.summary = publication.summary_message_id;
+  if (Object.keys(map).length <= 1 && Array.isArray(publication?.page_message_ids)) {
+    publication.page_message_ids.forEach((id, index) => {
+      if (specs.entries[index]) map[specs.entries[index].key] = id;
+    });
+  }
+  return map;
+}
 
-/** Sincroniza una publicación existente: edita lo que existe, crea/borra lo que cambia. */
-async function syncExisting(client, channel, log, pub, summaryEmbed, pageEmbeds) {
-  // ── 1. Recuperar/reconstruir el mensaje resumen ──────────────────────────
-  let summaryMessage = null;
-
-  if (pub.channel_id && pub.channel_id !== channel.id) {
-    // El canal cambió desde la última publicación
-    console.warn('[LogWatcher] El canal de logs cambió. Reconstruyendo publicación.');
-    await publishFresh(client, channel, log, summaryEmbed, pageEmbeds);
+async function syncExisting(client, channel, log, publication, specs, contentHash) {
+  if (publication.channel_id && publication.channel_id !== channel.id) {
+    await deleteDiscordPublication(client, publication);
+    await deletePublication(log.id);
+    await publishFresh(channel, log, specs, contentHash);
     return;
   }
 
+  let summary;
   try {
-    summaryMessage = await channel.messages.fetch(pub.summary_message_id);
+    summary = await channel.messages.fetch(publication.summary_message_id);
   } catch {
-    console.warn(`[LogWatcher] Mensaje resumen ${pub.summary_message_id} no encontrado — reconstruyendo.`);
-    await publishFresh(client, channel, log, summaryEmbed, pageEmbeds);
+    await deleteDiscordPublication(client, publication);
+    await deletePublication(log.id);
+    await publishFresh(channel, log, specs, contentHash);
     return;
   }
+  await editSpec(summary, specs.summary);
 
-  // Editar resumen
-  try {
-    await summaryMessage.edit({ embeds: [summaryEmbed] });
-    console.log(`[LogWatcher] ✅ Resumen editado (msg: ${summaryMessage.id})`);
-  } catch (err) {
-    console.error('[LogWatcher] ❌ Error editando resumen:', err.message);
-  }
-
-  // ── 2. Recuperar o recrear el hilo ───────────────────────────────────────
-  let thread = null;
-
-  if (pub.thread_id) {
-    thread = await client.channels.fetch(pub.thread_id).catch(() => null);
-    if (!thread) {
-      console.warn(`[LogWatcher] Hilo ${pub.thread_id} no existe — creando nuevo.`);
-    }
-  }
-
+  let thread = publication.thread_id ? await client.channels.fetch(publication.thread_id).catch(() => null) : null;
   if (!thread) {
     try {
-      thread = await summaryMessage.startThread({
-        name:                log.title.slice(0, 100),
-        autoArchiveDuration: 10080,
-        invitable:           false,
-      });
-      console.log(`[LogWatcher] ✅ Hilo privado recreado: ${thread.id}`);
-    } catch (err) {
-      console.error('[LogWatcher] ❌ Error recreando hilo:', err.message);
-      await upsertPublication(log.id, channel.id, summaryMessage.id, null, []);
+      thread = await startReadableLogThread(summary, String(log.title || 'Log').slice(0, 100));
+    } catch (error) {
+      // Algunos estados de Discord conservan temporalmente la asociación del
+      // mensaje con el hilo borrado e impiden crear otro sobre el mismo
+      // resumen. En ese caso se reconstruye la publicación completa.
+      console.warn(`[LogWatcher] No se pudo recrear el hilo sobre el resumen ${summary.id}; reconstruyendo el Log completo:`, error.message);
+      await deleteDiscordPublication(client, publication);
+      await deletePublication(log.id);
+      await publishFresh(channel, log, specs, contentHash);
       return;
     }
   }
+  if (thread.archived) await thread.setArchived(false).catch(() => {});
+  if (thread.name !== String(log.title || 'Log').slice(0, 100)) await thread.setName(String(log.title || 'Log').slice(0, 100)).catch(() => {});
 
-  // Reafirmar privacidad SIEMPRE — tanto si el hilo se acaba de crear
-  // como si ya existía. Esto corrige también hilos publicados antes de
-  // que este comportamiento existiera, o que algún admin haya cambiado
-  // manualmente en Discord. Los permisos de escritura ya están cubiertos
-  // a nivel del canal padre (ensureLogChannelThreadPerms, arriba).
-  await ensureThreadIsPrivate(thread);
+  const oldMap = normalizeLegacyMap(publication, specs);
+  const desiredKeys = specs.entries.map(spec => spec.key);
+  const existingKeys = Object.keys(oldMap).filter(key => key !== 'summary');
+  const storedOrder = Array.isArray(publication.message_order) && publication.message_order.length
+    ? publication.message_order.filter(key => oldMap[key])
+    : existingKeys;
+  const comparableDesired = desiredKeys.filter(key => oldMap[key]);
+  const orderChanged = storedOrder.length > 0 && storedOrder.join('|') !== comparableDesired.join('|');
+  const newMap = { summary: summary.id };
 
-  // Desarchivar si está archivado
-  if (thread.archived) {
-    await thread.setArchived(false).catch(err =>
-      console.warn('[LogWatcher] No se pudo desarchivar el hilo:', err.message)
-    );
-  }
-
-  // ── 3. Sincronizar páginas ────────────────────────────────────────────────
-  const existingIds  = Array.isArray(pub.page_message_ids) ? pub.page_message_ids : [];
-  const newPageCount = pageEmbeds.length;
-  const oldPageCount = existingIds.length;
-  const keepCount    = Math.min(newPageCount, oldPageCount);
-  const newIds       = [];
-
-  // Editar las páginas que ya existen
-  for (let i = 0; i < keepCount; i++) {
-    const msgId = existingIds[i];
-    try {
-      const msg = await thread.messages.fetch(msgId);
-      await msg.edit({ embeds: [pageEmbeds[i]] });
-      newIds.push(msg.id);
-      console.log(`[LogWatcher] ✅ Página ${i + 1} editada (msg: ${msgId})`);
-    } catch {
-      // Mensaje fue borrado manualmente — crearlo de nuevo
-      console.warn(`[LogWatcher] Página ${i + 1} (${msgId}) no encontrada — recreando.`);
-      try {
-        const newMsg = await thread.send({ embeds: [pageEmbeds[i]] });
-        newIds.push(newMsg.id);
-        console.log(`[LogWatcher] ✅ Página ${i + 1} recreada (msg: ${newMsg.id})`);
-      } catch (err2) {
-        console.error(`[LogWatcher] ❌ Error recreando página ${i + 1}:`, err2.message);
-      }
+  if (orderChanged) {
+    for (const key of existingKeys) {
+      const id = oldMap[key];
+      const msg = await thread.messages.fetch(id).catch(() => null);
+      if (msg) suppressDiscordDeletion(msg.id);
+      await msg?.delete().catch(() => {});
+    }
+    for (const spec of specs.entries) {
+      const msg = await sendSpec(thread, spec);
+      newMap[spec.key] = msg.id;
+    }
+  } else {
+    for (const spec of specs.entries) {
+      const existingId = oldMap[spec.key];
+      let message = existingId ? await thread.messages.fetch(existingId).catch(() => null) : null;
+      if (message) await editSpec(message, spec);
+      else message = await sendSpec(thread, spec);
+      newMap[spec.key] = message.id;
+    }
+    for (const [key, id] of Object.entries(oldMap)) {
+      if (key === 'summary' || desiredKeys.includes(key)) continue;
+      const message = await thread.messages.fetch(id).catch(() => null);
+      if (message) suppressDiscordDeletion(message.id);
+      await message?.delete().catch(() => {});
     }
   }
 
-  // Crear páginas nuevas si ahora hay más
-  if (newPageCount > oldPageCount) {
-    for (let i = oldPageCount; i < newPageCount; i++) {
-      try {
-        const newMsg = await thread.send({ embeds: [pageEmbeds[i]] });
-        newIds.push(newMsg.id);
-        console.log(`[LogWatcher] ✅ Página ${i + 1} creada (msg: ${newMsg.id})`);
-      } catch (err) {
-        console.error(`[LogWatcher] ❌ Error creando página ${i + 1}:`, err.message);
-      }
-    }
-  }
-
-  // Borrar páginas sobrantes si ahora hay menos
-  if (oldPageCount > newPageCount) {
-    for (let i = newPageCount; i < oldPageCount; i++) {
-      const msgId = existingIds[i];
-      try {
-        const msg = await thread.messages.fetch(msgId);
-        await msg.delete();
-        console.log(`[LogWatcher] 🗑️  Página ${i + 1} eliminada (msg: ${msgId})`);
-      } catch {
-        // Ya fue borrado manualmente — ignorar
-        console.warn(`[LogWatcher] Página sobrante ${i + 1} (${msgId}) ya no existe, ignorando.`);
-      }
-    }
-  }
-
-  // ── 4. Mensaje final con enlace ───────────────────────────────────────────
-  // Nota: en UPDATE no reenviamos el mensaje final para no duplicarlo.
-  // Solo lo añadimos si el hilo se acaba de recrear (newIds vacío al empezar).
-  // La forma más limpia: siempre intentamos borrarlo si existe y lo reenviamos.
-  await sendFinalLinkMessage(thread, log);
-
-  // ── 5. Persistir estado actualizado ──────────────────────────────────────
-  await upsertPublication(log.id, channel.id, summaryMessage.id, thread.id, newIds);
-  console.log(`[LogWatcher] ✅ Sincronización completada (${newIds.length} páginas).`);
+  await upsertPublication({
+    logId: log.id,
+    channelId: channel.id,
+    summaryMessageId: summary.id,
+    threadId: thread.id,
+    messageMap: newMap,
+    messageOrder: desiredKeys,
+    contentHash,
+  });
+  console.log(`[LogWatcher] ✅ “${log.title}” sincronizado.`);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Envía un array de embeds al hilo, uno por mensaje. Devuelve los IDs. */
-async function sendPages(thread, pageEmbeds, logTitle) {
-  const ids = [];
-  for (let i = 0; i < pageEmbeds.length; i++) {
-    try {
-      const msg = await thread.send({ embeds: [pageEmbeds[i]] });
-      ids.push(msg.id);
-      console.log(`[LogWatcher] ✅ Página ${i + 1}/${pageEmbeds.length} enviada (msg: ${msg.id})`);
-    } catch (err) {
-      console.error(`[LogWatcher] ❌ Error enviando página ${i + 1} de "${logTitle}":`, err.message);
-    }
-  }
-  return ids;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Se asegura de que el hilo sea privado (invitable: false).
- * Necesario para hilos creados antes de este cambio, o que un admin
- * haya modificado manualmente en Discord — el flag `invitable` no se
- * puede fijar solo al crear, también se corrige en cada sincronización.
- */
-async function ensureThreadIsPrivate(thread) {
-  if (thread.invitable === false) return; // ya está correcto, nada que hacer
-  try {
-    await thread.edit({ invitable: false });
-    console.log(`[LogWatcher] 🔒 Hilo ${thread.id} marcado como privado (invitable: false)`);
-  } catch (err) {
-    console.warn('[LogWatcher] ⚠️ No se pudo marcar el hilo como privado:', err.message);
-  }
-}
-
-/**
- * Configura el CANAL PADRE de logs para que sus hilos sean de
- * solo-lectura para @everyone (leer + reaccionar, sin escribir).
- *
- * IMPORTANTE: los hilos de Discord (ThreadChannel) NO tienen su propio
- * `permissionOverwrites` — la API de Discord no lo soporta, siempre
- * heredan los permisos del canal padre. Intentar editar permisos sobre
- * el hilo directamente (`thread.permissionOverwrites`) falla porque esa
- * propiedad no existe en un ThreadChannel, sin importar los permisos
- * del bot. Por eso esto se aplica una única vez sobre el canal de logs,
- * no por cada hilo.
- *
- * Permisos que se DENIEGAN a @everyone en el canal (se heredan en
- * todos los hilos creados bajo él):
- *   - SendMessagesInThreads → no pueden escribir dentro de los hilos
- *   - CreatePublicThreads / CreatePrivateThreads → no crean sub-hilos
- *
- * Permisos que se PERMITEN explícitamente:
- *   - ViewChannel, ReadMessageHistory, AddReactions
- *
- * No toca SendMessages del canal principal (los logs los publica el
- * bot ahí; si algún usuario también podía escribir en el canal antes,
- * sigue pudiendo — solo los HILOS quedan bloqueados).
- *
- * Requiere que el bot tenga "Gestionar canales" o "Gestionar permisos"
- * en el canal/servidor. Se cachea en memoria para no repetir la
- * llamada a la API en cada log — si cambias el canal con
- * /setlogchannel, el nuevo canal se configura la primera vez que se
- * publique un log ahí.
- */
 async function ensureLogChannelThreadPerms(channel) {
-  if (_channelThreadPermsConfigured.has(channel.id)) return;
+  if (configuredChannels.has(channel.id)) return;
   try {
-    const everyoneId = channel.guild.roles.everyone.id;
-    await channel.permissionOverwrites.edit(everyoneId, {
-      [PermissionFlagsBits.ViewChannel]:           true,
-      [PermissionFlagsBits.ReadMessageHistory]:    true,
-      [PermissionFlagsBits.AddReactions]:          true,
+    await channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, {
+      [PermissionFlagsBits.ViewChannel]: true,
+      [PermissionFlagsBits.ReadMessageHistory]: true,
+      [PermissionFlagsBits.AddReactions]: true,
       [PermissionFlagsBits.SendMessagesInThreads]: false,
-      [PermissionFlagsBits.CreatePublicThreads]:   false,
-      [PermissionFlagsBits.CreatePrivateThreads]:  false,
+      [PermissionFlagsBits.CreatePublicThreads]: false,
+      [PermissionFlagsBits.CreatePrivateThreads]: false,
     });
-    _channelThreadPermsConfigured.add(channel.id);
-    console.log(`[LogWatcher] 🔒 Canal ${channel.id} configurado: hilos de solo-lectura para @everyone`);
-  } catch (err) {
-    // No fatal — los hilos se siguen creando y publicando, solo quedan
-    // abiertos a escritura hasta que se resuelva el permiso del bot.
-    console.warn('[LogWatcher] ⚠️ No se pudieron configurar los permisos del canal:', err.message);
-    console.warn('[LogWatcher]    Asegúrate de que el bot tenga "Gestionar canales" en el canal de logs.');
+    const me = channel.guild.members.me || await channel.guild.members.fetchMe().catch(() => null);
+    if (me) {
+      await channel.permissionOverwrites.edit(me.id, {
+        [PermissionFlagsBits.ViewChannel]: true,
+        [PermissionFlagsBits.SendMessages]: true,
+        [PermissionFlagsBits.SendMessagesInThreads]: true,
+        [PermissionFlagsBits.CreatePublicThreads]: true,
+        [PermissionFlagsBits.EmbedLinks]: true,
+        [PermissionFlagsBits.AttachFiles]: true,
+        [PermissionFlagsBits.ReadMessageHistory]: true,
+        [PermissionFlagsBits.ManageThreads]: true,
+      });
+    }
+    configuredChannels.add(channel.id);
+  } catch (error) {
+    console.warn('[LogWatcher] No se pudieron fijar permisos de solo lectura:', error.message);
   }
 }
 
-/**
- * Publica el mensaje final en el hilo con el enlace directo al log en la web.
- * Si ya existe un mensaje final (en UPDATE) lo borra primero para no duplicar.
- * Usa una "firma" reconocible en el contenido para identificarlo.
- */
-async function sendFinalLinkMessage(thread, log) {
-  const logUrl = SITE_URL
-    ? `${SITE_URL.replace(/\/$/, '')}/index.html?log=${log.id}`
-    : null;
-
-  const content = logUrl
-    ? `📖 Para ver el log más detallado y con imágenes, visita la página.\n${logUrl}`
-    : '📖 Para ver el log más detallado y con imágenes, visita la página.';
-
-  // Buscar y eliminar mensajes finales anteriores del bot (para UPDATE)
-  try {
-    const recent = await thread.messages.fetch({ limit: 10 });
-    for (const [, msg] of recent) {
-      if (msg.author?.id === thread.client.user?.id && msg.content?.startsWith('📖 Para ver el log')) {
-        await msg.delete().catch(() => null);
-      }
-    }
-  } catch {
-    // Si no podemos leer mensajes, simplemente enviamos sin borrar
+async function deleteDiscordPublication(client, publication) {
+  if (publication.thread_id) {
+    suppressDiscordDeletion(publication.thread_id);
+    const thread = await client.channels.fetch(publication.thread_id).catch(() => null);
+    await thread?.delete().catch(() => {});
   }
-
-  try {
-    await thread.send({ content });
-    console.log(`[LogWatcher] ✅ Mensaje final enviado en hilo ${thread.id}`);
-  } catch (err) {
-    console.warn('[LogWatcher] ⚠️ No se pudo enviar el mensaje final:', err.message);
+  if (publication.channel_id && publication.summary_message_id) {
+    suppressDiscordDeletion(publication.summary_message_id);
+    const channel = await client.channels.fetch(publication.channel_id).catch(() => null);
+    const message = await channel?.messages?.fetch(publication.summary_message_id).catch(() => null);
+    await message?.delete().catch(() => {});
   }
+}
+
+async function processDeletionQueueRow(client, row) {
+  if (!row?.id || deletionLocks.has(row.id)) return;
+  deletionLocks.add(row.id);
+  try {
+    await deleteDiscordPublication(client, row);
+    await deletePublication(row.log_id);
+    await supabase.from('discord_deletion_queue').delete().eq('id', row.id);
+  } catch (error) {
+    console.error(`[LogWatcher] No se pudo procesar el borrado ${row.id}:`, error);
+  } finally {
+    deletionLocks.delete(row.id);
+  }
+}
+
+async function sweepPendingDeletions(client) {
+  const { data, error } = await supabase.from('discord_deletion_queue').select('*').order('created_at', { ascending: true });
+  if (error) {
+    console.warn('[LogWatcher] No se pudo revisar la cola:', error.message);
+    return;
+  }
+  for (const row of data || []) await processDeletionQueueRow(client, row);
 }

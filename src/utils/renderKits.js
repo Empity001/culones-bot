@@ -9,15 +9,27 @@ import axios from 'axios';
 import { ensureFonts, FONT } from './fonts.js';
 import { fillTextWithEmoji } from './emojiText.js';
 import { KIT_COLUMNS } from '../services/kits.js';
+import { getRenderPalette, themeRgba } from '../services/siteTheme.js';
 
 // ── Tokens de diseño (mismos que renderWeaponCatalog.js para consistencia) ───
-const BG_COLOR      = '#0c0a14';
-const BORDER_COLOR  = 'rgba(255,255,255,0.08)';
-const CYAN          = '#4dd4e8';
-const GOLD          = '#f3b73a';
-const INK_100       = '#f4f1fb';
-const INK_400       = '#9a92b8';
-const INK_600       = 'rgba(255,255,255,0.35)';
+let BG_COLOR = '#090612';
+let BORDER_COLOR = 'rgba(169,133,255,0.18)';
+let CYAN = '#a985ff';
+let GOLD = '#d6b56f';
+let INK_100 = '#f6f1ff';
+let INK_400 = '#aaa2c1';
+let INK_600 = 'rgba(220,208,244,0.52)';
+
+function applyRenderTheme() {
+  const theme = getRenderPalette();
+  BG_COLOR = theme.bg;
+  BORDER_COLOR = themeRgba(theme.primary, 0.18);
+  CYAN = theme.primary;
+  GOLD = theme.accent;
+  INK_100 = theme.text;
+  INK_400 = theme.muted;
+  INK_600 = themeRgba(theme.muted, 0.52);
+}
 
 const CANVAS_W    = 640;
 const PADDING     = 20;
@@ -124,6 +136,7 @@ function kitBodyHeight(ctx, kit) {
  * @returns {Buffer}
  */
 export async function renderKitsImage(kits, serverName = 'Culones RPG') {
+  applyRenderTheme();
   ensureFonts();
 
   // Pre-descargar todas las imágenes de todos los kits/columnas
@@ -156,7 +169,7 @@ export async function renderKitsImage(kits, serverName = 'Culones RPG') {
   ctx.fillRect(0, 0, CANVAS_W, canvas.height);
 
   // ── Header ────────────────────────────────────────────────────────────────
-  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fillStyle = 'rgba(124,92,255,0.10)';
   ctx.fillRect(0, 0, CANVAS_W, HEADER_H);
   ctx.strokeStyle = `${CYAN}66`;
   ctx.lineWidth   = 1;
@@ -194,10 +207,10 @@ export async function renderKitsImage(kits, serverName = 'Culones RPG') {
     const cardH = kitBodyHeight(ctx, kit);
     const cardY = y;
 
-    ctx.fillStyle = 'rgba(255,255,255,0.035)';
+    ctx.fillStyle = 'rgba(143,105,230,0.075)';
     roundRect(ctx, PADDING, cardY, cardW, cardH, 8);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.strokeStyle = 'rgba(169,133,255,0.18)';
     ctx.lineWidth   = 1;
     roundRect(ctx, PADDING, cardY, cardW, cardH, 8);
     ctx.stroke();

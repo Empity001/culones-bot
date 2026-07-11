@@ -7,6 +7,7 @@ import { createCanvas, loadImage } from '@napi-rs/canvas';
 import axios from 'axios';
 import { ensureFonts, FONT } from './fonts.js';
 import { TIER_COLUMNS } from '../services/tierlist.js';
+import { getRenderPalette, themeRgba } from '../services/siteTheme.js';
 
 // ── Tokens de diseño (idénticos a renderTierlist.js) ─────────────────────────
 const ITEM_SIZE    = 44;
@@ -14,10 +15,18 @@ const ITEM_GAP     = 5;
 const ROW_LABEL_W  = 58;
 const PADDING      = 14;
 const ROW_GAP      = 6;
-const BG_COLOR     = '#0c0a14';
-const BORDER_COLOR = 'rgba(255,255,255,0.08)';
-const CYAN         = '#4dd4e8';
-const INK_400      = '#9a92b8';
+let BG_COLOR = '#090612';
+let BORDER_COLOR = 'rgba(169,133,255,0.18)';
+let CYAN = '#a985ff';
+let INK_400 = '#aaa2c1';
+
+function applyRenderTheme() {
+  const theme = getRenderPalette();
+  BG_COLOR = theme.bg;
+  BORDER_COLOR = themeRgba(theme.primary, 0.18);
+  CYAN = theme.primary;
+  INK_400 = theme.muted;
+}
 
 const imageCache = new Map();
 const IMAGE_FAIL_CACHE = new Set();
@@ -59,7 +68,7 @@ function contrastColor(hex) {
   const r = parseInt(c.slice(0, 2), 16);
   const g = parseInt(c.slice(2, 4), 16);
   const b = parseInt(c.slice(4, 6), 16);
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5 ? '#0c0a14' : '#ffffff';
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5 ? '#090612' : '#ffffff';
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -99,7 +108,7 @@ async function drawPanel(ctx, grouped, columnLabel, panelW, panelH, ox, oy) {
 
   // Header del panel
   const PANEL_HEADER_H = 36;
-  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fillStyle = 'rgba(124,92,255,0.10)';
   ctx.fillRect(ox, oy, panelW, PANEL_HEADER_H);
   ctx.strokeStyle = `${CYAN}66`;
   ctx.lineWidth   = 1;
@@ -197,6 +206,7 @@ async function drawPanel(ctx, grouped, columnLabel, panelW, panelH, ox, oy) {
  * @returns {Buffer}
  */
 export async function renderTierlistFullImage(tierlistData, serverName = 'Culones RPG') {
+  applyRenderTheme();
   ensureFonts();
 
   const { rows, items } = tierlistData;
@@ -234,7 +244,7 @@ export async function renderTierlistFullImage(tierlistData, serverName = 'Culone
   ctx.fillRect(0, 0, TOTAL_W, totalH);
 
   // ── Header global ─────────────────────────────────────────────────────────
-  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fillStyle = 'rgba(124,92,255,0.10)';
   ctx.fillRect(0, 0, TOTAL_W, GLOBAL_HEADER_H);
   ctx.strokeStyle = `${CYAN}66`;
   ctx.lineWidth   = 1;
@@ -269,7 +279,7 @@ export async function renderTierlistFullImage(tierlistData, serverName = 'Culone
   }
 
   // ── Footer global ─────────────────────────────────────────────────────────
-  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fillStyle = 'rgba(124,92,255,0.10)';
   ctx.fillRect(0, totalH - GLOBAL_FOOTER_H, TOTAL_W, GLOBAL_FOOTER_H);
 
   ctx.fillStyle    = 'rgba(255,255,255,0.3)';

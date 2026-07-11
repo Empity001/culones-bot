@@ -5,23 +5,24 @@
 import { createCanvas } from '@napi-rs/canvas';
 import { ensureFonts, FONT } from './fonts.js';
 import { fillTextWithEmoji, measureTextWithEmoji } from './emojiText.js';
+import { getRenderPalette, themeRgba } from '../services/siteTheme.js';
 
 // ── Tokens de diseño (compartidos entre los tres renderers) ─────────────────
-const BG_COLOR    = '#0c0a14';
-const BORDER_COLOR = 'rgba(255,255,255,0.08)';
-const GOLD        = '#f3b73a';
-const CYAN        = '#4dd4e8';
-const MAGENTA     = '#ff3d8e';
-const INK_100     = '#f4f1fb';
-const INK_400     = '#9a92b8';
-const INK_600     = 'rgba(255,255,255,0.35)';
+let BG_COLOR = '#090612';
+let BORDER_COLOR = 'rgba(169,133,255,0.18)';
+let GOLD = '#d6b56f';
+let CYAN = '#a985ff';
+let MAGENTA = '#ec72d3';
+let INK_100 = '#f6f1ff';
+let INK_400 = '#aaa2c1';
+let INK_600 = 'rgba(220,208,244,0.52)';
 
 const CANVAS_W    = 680;
 const PADDING     = 20;
 const ROW_H       = 58;
 
 const RELEVANCE_COLOR = {
-  low:      '#9a92b8',
+  low:      '#aaa2c1',
   normal:   CYAN,
   high:     GOLD,
   critical: MAGENTA,
@@ -33,6 +34,22 @@ const RELEVANCE_LABEL = {
   high:     'Alta',
   critical: 'Crítica',
 };
+
+function applyRenderTheme() {
+  const theme = getRenderPalette();
+  BG_COLOR = theme.bg;
+  BORDER_COLOR = themeRgba(theme.primary, 0.18);
+  GOLD = theme.accent;
+  CYAN = theme.primary;
+  MAGENTA = theme.event;
+  INK_100 = theme.text;
+  INK_400 = theme.muted;
+  INK_600 = themeRgba(theme.muted, 0.52);
+  RELEVANCE_COLOR.low = theme.muted;
+  RELEVANCE_COLOR.normal = theme.primary;
+  RELEVANCE_COLOR.high = theme.warning;
+  RELEVANCE_COLOR.critical = theme.danger;
+}
 
 function truncate(str, max) {
   if (!str) return '';
@@ -60,6 +77,7 @@ function roundRect(ctx, x, y, w, h, r) {
  * @returns {Buffer}
  */
 export function renderLogsImage(logs, serverName = 'Culones RPG') {
+  applyRenderTheme();
   // Registrar fuentes bundleadas antes del primer uso (idempotente)
   ensureFonts();
 
@@ -73,7 +91,7 @@ export function renderLogsImage(logs, serverName = 'Culones RPG') {
   ctx.fillRect(0, 0, CANVAS_W, canvas.height);
 
   // ── Header ──────────────────────────────────────────────────────────────
-  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fillStyle = 'rgba(124,92,255,0.10)';
   ctx.fillRect(0, 0, CANVAS_W, HEADER_H);
   ctx.strokeStyle = 'rgba(243,183,58,0.4)';
   ctx.lineWidth = 1;
@@ -111,7 +129,7 @@ export function renderLogsImage(logs, serverName = 'Culones RPG') {
     const cat      = log.categoryInfo;
 
     // Fondo de la fila
-    ctx.fillStyle = 'rgba(255,255,255,0.035)';
+    ctx.fillStyle = 'rgba(143,105,230,0.075)';
     roundRect(ctx, PADDING, y, contentW, ROW_H, 8);
     ctx.fill();
 

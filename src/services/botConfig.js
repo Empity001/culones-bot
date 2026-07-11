@@ -1,41 +1,50 @@
 // src/services/botConfig.js
-// Configuración persistente del bot guardada en Supabase.
-// Actualmente maneja: qué canal recibe los embeds de nuevos logs.
+// Configuración persistente del único servidor oficial.
 
 import { supabase } from './supabase.js';
+import { config } from '../config.js';
 
-const TABLE = 'bot_config';
+const TABLE = 'discord_guild_config';
 
-/**
- * Obtiene un valor de configuración por clave.
- * @param {string} key
- * @returns {Promise<string|null>}
- */
-export async function getConfigValue(key) {
+export async function getGuildConfig() {
   const { data, error } = await supabase
     .from(TABLE)
-    .select('value')
-    .eq('key', key)
-    .single();
+    .select('*')
+    .eq('guild_id', config.discord.guildId)
+    .maybeSingle();
 
-  if (error || !data) return null;
-  return data.value;
+  if (error) throw new Error(`[BotConfig] Error leyendo configuración: ${error.message}`);
+  return data || null;
 }
 
-/**
- * Guarda (upsert) un valor de configuración.
- * @param {string} key
- * @param {string} value
- */
-export async function setConfigValue(key, value) {
-  const { error } = await supabase
+export async function updateGuildConfig(patch = {}) {
+  const row = {
+    guild_id: config.discord.guildId,
+    ...patch,
+    updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
     .from(TABLE)
-    .upsert({ key, value }, { onConflict: 'key' });
-
-  if (error) throw new Error(`[BotConfig] Error guardando ${key}: ${error.message}`);
+    .upsert(row, { onConflict: 'guild_id' })
+    .select('*')
+    .single();
+  if (error) throw new Error(`[BotConfig] Error guardando configuración: ${error.message}`);
+  return data;
 }
 
-// Claves conocidas (para autocompletado y evitar typos)
+export async function getConfigValue(key) {
+  const cfg = await getGuildConfig();
+  if (!cfg) return null;
+  return cfg[key] ?? null;
+}
+
+export async function setConfigValue(key, value, updatedBy = null) {
+  return updateGuildConfig({ [key]: value, updated_by: updatedBy });
+}
+
 export const CONFIG_KEYS = {
   LOG_CHANNEL_ID: 'log_channel_id',
+  ADMIN_ROLE_ID: 'admin_role_id',
+  GUIDES_FORUM_CHANNEL_ID: 'guides_forum_channel_id',
+  FORUM_REACTIONS: 'forum_reactions',
 };

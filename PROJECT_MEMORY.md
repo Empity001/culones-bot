@@ -1,3 +1,27 @@
+# Sesión 10 — integración completa Discord OAuth, Logs granulares y foro de Guías
+
+- Se eliminó `/getcode` y la rotación de códigos.
+- Se añadieron `/adminrole set/view/clear` y `/guidesforum set/view/clear`.
+- Los Logs publican resumen + un mensaje por mob/item/Extra con deep links y recuperación automática.
+- Las Guías usan cola persistente, un post por Guía, todos sus rangos, tags de categoría/tipo, reacciones configurables, pixel art nítido y Mesas de trabajo visuales.
+- Los screenshots se adaptaron al rebranding, usan la paleta de la web y publican resultados compartibles de forma pública.
+- Se añadieron eventos `messageDelete`/`threadDelete`, barrido de integridad y supresión de borrados intencionales.
+- El bot usa `Guilds` + `GuildMessages`; no solicita `MessageContent`.
+- Los materiales y resultados de Mesas de trabajo enlazan a Guías relacionadas cuando existe `guide_link`.
+- Si un hilo de Log borrado no puede recrearse sobre el resumen antiguo, se reconstruye toda la publicación.
+
+# Sesión 9 — Integración Discord OAuth, Logs granulares y foro de Guías
+
+- Se eliminó el sistema `/getcode` y la rotación de códigos.
+- La web ahora inicia sesión con Discord mediante Supabase Auth y valida un único rol configurable.
+- Se añadió `/adminrole set/view/clear`, `/guidesforum set/view/clear` y se reforzó `/setlogchannel`.
+- Todas las escrituras administrativas pasan por `discord-admin-api`; Storage usa subidas firmadas.
+- Los Logs de Discord se sincronizan con un mensaje por mob, item y Extra, además de resumen, hilo de solo lectura y deep links.
+- Las Guías pueden publicarse, actualizarse y despublicarse manualmente en un foro, con todos sus rangos dentro de un solo post.
+- Se añadieron tags por categoría/tipo, reacciones configurables, cola idempotente, recuperación tras reinicios, pixel art nearest-neighbor y Mesas de trabajo visuales.
+- Los screenshots publican resultados públicos con el rebranding y dejan los errores en privado.
+- Migración nueva: `migration_021_discord_auth_and_forum.sql`.
+- Guía de despliegue: `GUIA_DESPLIEGUE_DISCORD_AUTH.md`.
 # PROJECT_MEMORY — culones-bot
 
 Registro de sesiones de desarrollo del bot de Discord. Cada entrada resume qué se hizo, qué quedó pendiente y qué problemas se conocen pero no se resolvieron todavía.
@@ -335,3 +359,10 @@ Pendiente:
 
 Problemas conocidos:
 - Ninguno nuevo identificado en esa sesión.
+## Ajuste final — permisos para canales de solo lectura
+
+- `/setlogchannel` y `/guidesforum set` validan ahora `ManageRoles` además de `ManageChannels`.
+- El permiso es necesario para crear o editar los overwrites que impiden a usuarios normales escribir en hilos, sin bloquear al bot.
+- Ambos comandos aplican un overwrite explícito al miembro del bot para conservar envío, embeds, archivos, reacciones y gestión de hilos.
+- Los mensajes de error indican de forma clara que falta Gestionar roles/permisos.
+

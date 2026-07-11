@@ -415,9 +415,9 @@ export function buildLogPageEmbeds(log, category, mobs, items, siteUrl = '') {
     }
   }
 
-  // ── Bloques libres ────────────────────────────────────────────────────────
+  // ── Extras ────────────────────────────────────────────────────────
   if (libres.length > 0) {
-    builder.newSection(`📋 Bloques libres (${libres.length})`);
+    builder.newSection(`📋 Extras (${libres.length})`);
 
     for (const libre of libres) {
       const fields = parseLibreFields(libre);
@@ -447,9 +447,9 @@ export function buildLogPageEmbeds(log, category, mobs, items, siteUrl = '') {
 
       // splitFieldValue se encarga de dividir en continuaciones si supera 1024
       builder.addField(
-        `📋 ${libre.name || 'Bloque libre'}`,
+        `📋 ${libre.name || 'Extra'}`,
         fullText,
-        `📋 Bloques libres (${libres.length})`
+        `📋 Extras (${libres.length})`
       );
     }
   }

@@ -10,29 +10,33 @@ export const data = new SlashCommandBuilder()
   .setDescription('Comprueba que el bot está activo y muestra la latencia');
 
 export async function execute(interaction) {
-  const start = Date.now();
+  const startedAt = Date.now();
+  await interaction.deferReply({ ephemeral: true });
 
-  // Ping a Supabase
   let supabaseMs = '?';
   try {
-    const t = Date.now();
-    await supabase.from('bot_config').select('key').limit(1);
-    supabaseMs = `${Date.now() - t}ms`;
-  } catch {
+    const queryStartedAt = Date.now();
+    const { error } = await supabase
+      .from('discord_guild_config')
+      .select('guild_id')
+      .limit(1);
+    if (error) throw error;
+    supabaseMs = `${Date.now() - queryStartedAt}ms`;
+  } catch (error) {
+    console.warn('[Ping] No se pudo consultar Supabase:', error?.message || error);
     supabaseMs = 'Error';
   }
 
-  await interaction.reply({
+  await interaction.editReply({
     embeds: [
       buildSuccessEmbed(
         'Pong!',
         [
-          `🏓 **Latencia Discord:** ${Date.now() - start}ms`,
+          `🏓 **Respuesta del comando:** ${Date.now() - startedAt}ms`,
           `🌐 **Latencia WebSocket:** ${interaction.client.ws.ping}ms`,
           `🗄️ **Latencia Supabase:** ${supabaseMs}`,
         ].join('\n')
       ),
     ],
-    ephemeral: true,
   });
 }

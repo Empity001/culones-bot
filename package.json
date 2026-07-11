@@ -13,11 +13,13 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.3",
-    "discord.js": "^14.16.3",
-    "node-cron": "^3.0.3",
+    "@fontsource/noto-emoji": "^5.2.11",
     "@napi-rs/canvas": "^0.1.51",
+    "@supabase/supabase-js": "^2.39.3",
     "axios": "^1.7.2",
-    "@fontsource/noto-emoji": "^5.2.11"
+    "discord.js": "^14.16.3"
+  },
+  "overrides": {
+    "undici": "6.27.0"
   }
 }

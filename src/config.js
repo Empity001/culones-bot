@@ -1,6 +1,5 @@
 // src/config.js
-// Todas las variables de entorno en un solo lugar.
-// El bot no arranca si falta algo crítico.
+// Configuración centralizada. El bot trabaja con un único servidor oficial.
 
 const required = [
   'DISCORD_TOKEN',
@@ -8,7 +7,6 @@ const required = [
   'DISCORD_GUILD_ID',
   'SUPABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
-  'AUTHORIZED_USER_IDS',
 ];
 
 for (const key of required) {
@@ -26,13 +24,11 @@ export const config = {
   },
   supabase: {
     url: process.env.SUPABASE_URL,
-    // El bot usa service_role para escribir libremente en Supabase
-    // (nunca expongas esta clave en el frontend)
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   },
-  // Lista de IDs de Discord que pueden pedir el código admin
-  authorizedUserIds: process.env.AUTHORIZED_USER_IDS
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean),
+  siteUrl: (process.env.SITE_URL || 'https://empity001.github.io/culones-rpg/').replace(/\/+$/, ''),
+  worker: {
+    pollIntervalMs: Math.max(5000, Number(process.env.GUIDE_JOB_POLL_MS || 15000)),
+    maxJobAttempts: Math.max(1, Number(process.env.GUIDE_JOB_MAX_ATTEMPTS || 5)),
+  },
 };

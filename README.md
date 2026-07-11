@@ -1,163 +1,181 @@
-# 🤖 Culones RPG — Bot de Discord
+# Culones RPG — Bot de Discord
 
-Bot que conecta el servidor de Discord con la web de **culones-rpg**: gestiona el código temporal de administrador, anuncia automáticamente los logs nuevos del juego, y permite capturar cualquier sección de la web (tierlist, logs, armas) como imagen para compartirla en un canal.
+Bot exclusivo del servidor oficial de Culones RPG. Conecta Discord con la web y Supabase: publica Logs, sincroniza Guías con un foro, genera screenshots y valida el rol que permite administrar la página.
 
----
+## Comandos
 
-## 📋 Qué hace este bot
+| Comando | Uso | Permiso |
+|---|---|---|
+| `/ping` | Comprueba Discord y Supabase | Cualquiera |
+| `/screenshot tierlist` | Genera la Tierlist completa o una columna | Cualquiera |
+| `/screenshot guias` | Genera el catálogo de Guías | Cualquiera |
+| `/screenshot guia` | Genera una imagen por rango | Cualquiera |
+| `/screenshot kits` | Genera los Kits recomendados | Cualquiera |
+| `/screenshot logs` | Genera la lista o el detalle de un Log | Cualquiera |
+| `/setlogchannel canal:#canal` | Configura el canal de Logs y sus hilos de solo lectura | Propietario o `Administrator` |
+| `/adminrole set/view/clear` | Configura el único rol que concede administración web | Propietario o `Administrator` |
+| `/guidesforum set/view/clear` | Configura el foro de Guías | Propietario o `Administrator` |
 
-### 🔑 Código de administrador (rotación automática)
+`/getcode` ya no existe. El acceso administrativo se realiza desde la web mediante Discord OAuth y el rol elegido con `/adminrole set`.
 
-La web tiene un modo de administrador protegido por un código temporal — este bot es quien lo genera y lo entrega, nunca se escribe a mano.
+## Logs automáticos
 
-- **Al arrancar el bot**, y luego **automáticamente cada 24 horas** (a las 00:00 UTC), se genera un código nuevo de 8 caracteres alfanuméricos (sin `0`, `O`, `I`, `l` para evitar confusiones al copiarlo) y se guarda en Supabase con su fecha de expiración. El código anterior queda desactivado en el mismo momento.
-- **`/getcode`** — el único modo de obtenerlo. Solo responde a los IDs de Discord listados en `AUTHORIZED_USER_IDS`; cualquier otra persona recibe un mensaje de "no tienes permiso" y no ve nada más. Si está autorizado, el bot le envía el código **por mensaje privado** (nunca en el canal, ni siquiera en una respuesta efímera del propio canal), junto con la fecha exacta de expiración. Si el usuario tiene los DMs cerrados, se le avisa que debe habilitarlos.
+Cada Log produce:
 
-### 📢 Anuncio automático de logs nuevos
+1. Un resumen en el canal configurado, con portada solo cuando el Log tenga una.
+2. Un hilo público de solo lectura.
+3. Un mensaje independiente por mob.
+4. Un mensaje independiente por item.
+5. Un mensaje independiente por Extra.
+6. Un mensaje final con enlace a la web.
 
-El bot está suscrito en tiempo real a la tabla de logs de Supabase — no consulta cada X minutos, reacciona al instante cuando algo cambia.
+Cada elemento enlaza al punto exacto de la página mediante `log`, `tab` y `entry`. La web selecciona el Log, abre la pestaña, despliega la ficha, hace scroll y la resalta.
 
-- **Log nuevo publicado en la web** → el bot construye un embed (título, descripción, categoría con su emoji/color, relevancia, fecha, mobs e items resumidos en una línea cada uno, y **un campo completo por cada bloque libre** —campos, sub-campos, descripción e imagen, sin resumir, porque su gracia es justamente llevar información custom que no entra en un resumen genérico—) y lo publica en el canal configurado.
-- **Log editado en la web** → en vez de publicar un mensaje duplicado, el bot **edita el mismo mensaje de Discord ya existente** con la información actualizada. Si por algún motivo ese mensaje fue borrado manualmente del canal, el bot lo detecta y publica uno nuevo en su lugar.
-- **`/setlogchannel #canal`** — define a qué canal de texto se publican estos anuncios. Solo funciona para los IDs autorizados (el comando es visible para cualquiera, pero solo responde con éxito a quien está en la lista). El bot comprueba que tiene permiso de escritura en ese canal antes de guardarlo.
+El bot guarda un `message_map` y un `message_order` persistentes. Al editar el contenido:
 
-#### 🔗 Deep links: Discord → Web
+- Edita mensajes existentes por ID de elemento.
+- Crea los nuevos.
+- Elimina los que ya no existen.
+- Reconstruye mensajes, hilos o resúmenes borrados.
+- Agrupa eventos cercanos sin perder la edición más reciente.
 
-Los embeds de anuncio incluyen **URLs directas** a la web:
+## Foro de Guías
 
-- El **título del embed resumen** enlaza a `index.html?log=<uuid>`, abriendo directamente el modal de detalle de ese log.
-- Cada **mob, item y bloque libre** en los embeds del hilo incluye un campo `🔗 Ver en la web` que lleva a `index.html?log=<uuid>&item=<uuid-del-bloque>`. La web abre el log, expande ese bloque específico, hace scroll y lo resalta brevemente.
+La publicación en la web y en Discord son estados separados. Desde la web, un administrador puede:
 
-Los links usan IDs reales (UUIDs) de Supabase, nunca nombres ni posiciones — son estables aunque el log se edite.
+- **Publicar en foro**.
+- **Actualizar en foro** cuando el contenido cambie.
+- **Despublicar del foro**.
+- **Volver a publicar** cuando el post se haya eliminado manualmente.
 
-Para que los deep links funcionen, la variable de entorno `SITE_URL` debe apuntar a la raíz del sitio (sin barra final), por ejemplo: `https://mi-dominio.github.io/culones-rpg`. Si `SITE_URL` no está definida, los embeds siguen funcionando pero sin links clickeables a la web.
+Cada Guía crea una sola publicación con todos sus rangos. El bot organiza información general, descripciones, estadísticas, habilidades, recursos, Mesas de trabajo y Extras en mensajes separados. Secciones largas se dividen en continuaciones.
 
-### 🖼️ `/screenshot` — capturar una sección de la web como imagen
+Las publicaciones usan dos etiquetas:
 
-Cualquier miembro del servidor puede usar los subcomandos de screenshot. La opción `canal` (redirigir la imagen a otro canal) es la única parte restringida a los IDs autorizados — si alguien sin permiso la usa, se ignora silenciosamente y la imagen va al canal donde está.
+- `C · Categoría`
+- `T · Tipo`
 
-#### `/screenshot tierlist`
+El bot crea y reutiliza las etiquetas por ID. Si el foro alcanza su límite, la publicación falla con un mensaje explicativo en la web.
 
-Genera una imagen de la tierlist.
+La cola `guide_forum_jobs` es duradera e idempotente. Si Railway se reinicia, los trabajos pendientes continúan y los que quedaron interrumpidos se recuperan.
 
-- **`columna: Arma / Sub-arma / Accesorio`** — captura esa columna individual: cada fila (tier) con su color y nombre, y los elementos con su miniatura en pixel-art nítido.
-- **`columna: Todas juntas`** — genera una sola imagen ancha (1260px) con las 3 columnas side-by-side en un mismo render.
-- Opción `canal` (solo admins): envía la imagen a otro canal en vez del actual.
 
-#### `/screenshot armas`
+## Recuperación ante borrados manuales
 
-Catálogo visual de todas las armas publicadas — nombre e imagen de cada una, sin specs ni rangos. Agrupa las armas por categoría con su color.
+El bot escucha eliminaciones de mensajes e hilos y también ejecuta una comprobación de integridad al iniciar y cada hora:
 
-- Sin filtros: muestra todas las armas publicadas.
-- **`filtro: Categoría`** + **`valor: <autocomplete>`** — muestra solo las armas de esa categoría.
-- **`filtro: Tipo`** + **`valor: <autocomplete>`** — muestra solo las armas de ese tipo.
-- Opción `canal` (solo admins): envía la imagen a otro canal.
+- Un mensaje interno de una Guía borrado marca la publicación como desactualizada para que **Actualizar en foro** lo reconstruya.
+- Una publicación de Guía eliminada cambia a estado **lost** y muestra **Volver a publicar**.
+- Un resumen, hilo o mensaje interno de Log eliminado se reconstruye automáticamente.
+- Los borrados intencionales realizados por el propio bot se suprimen temporalmente para no iniciar una recuperación falsa.
 
-#### `/screenshot arma`
+## Imágenes y pixel art
 
-Ficha completa de un arma específica, una imagen por rango.
+Las imágenes estáticas de hasta 64×64 se tratan como pixel art:
 
-- **`nombre: <autocomplete>`** — busca entre las armas publicadas mientras escribís. Al confirmar, genera una imagen por cada rango (MK1, MK2...) con descripción, estadísticas, habilidades con barra de nivel y receta de mejora. Todas se mandan juntas en el mismo mensaje.
-- Opción `canal` (solo admins): envía las imágenes a otro canal.
+- Escalado a 256×256.
+- Nearest-neighbor.
+- Sin antialiasing.
+- Fondo transparente.
+- Conserva proporción.
 
-#### `/screenshot logs`
+La imagen escalada se adjunta directamente a Discord; no se almacena permanentemente en Supabase ni en Railway. Las imágenes grandes se envían sin ese tratamiento.
 
-Lista o detalle de logs.
+Las Mesas de trabajo se renderizan como interfaces visuales de Minecraft, acompañadas por una versión textual de materiales y cantidades.
 
-- Sin opciones: genera una imagen con los 10 logs más recientes (título, categoría, relevancia, fecha).
-- **`cantidad`**: cuántos logs mostrar (máximo 20).
-- **`ver: <autocomplete del título>`** — en vez de la lista, genera una imagen con el contenido completo de ese log: título, descripción, mobs con sus stats (vida/daño/armor, equipamiento, ubicación), items normales (rango, tipo, dónde se obtiene) y bloques libres en su propia sección, parseados campo por campo sin mostrar `_libre` ni JSON crudo.
-- Opción `canal` (solo admins): envía la imagen a otro canal.
+## Screenshots
 
-### 🏓 `/ping` — diagnóstico
+Los renderizadores usan una temática oscura y morada coherente con el rebranding de la web. Los resultados compartibles se envían públicamente con un texto como:
 
-Visible para cualquiera. Responde con la latencia del bot hacia Discord (WebSocket) y hacia Supabase, útil para confirmar que ambas conexiones están sanas sin tener que revisar logs del servidor.
+> @Usuario solicitó el detalle del Log «Cumpleaños».
 
----
+La interacción privada se usa solo mientras se procesa y se elimina al terminar. Los errores sí permanecen privados. Si una Guía genera más de diez imágenes, se divide en varios mensajes sin repetir el ping.
 
-## 🔒 Quién puede usar qué
+## Reacciones del foro
 
-| Comando / Opción | Quién puede usarlo |
-|---|---|
-| `/ping` | Cualquiera |
-| `/screenshot` (generar imagen) | Cualquiera |
-| `/screenshot` opción `canal` | Solo IDs en `AUTHORIZED_USER_IDS` |
-| `/getcode` | Solo IDs en `AUTHORIZED_USER_IDS` |
-| `/setlogchannel` | Solo IDs en `AUTHORIZED_USER_IDS` |
+Discord permite una reacción nativa predeterminada por foro, pero Culones RPG admite hasta 20 reacciones configuradas desde Herramientas. El bot las coloca en el primer mensaje de cada publicación. Se pueden aplicar a posts existentes mediante la cola, respetando rate limits.
 
-La autorización es siempre por **ID de usuario de Discord**, no por rol del servidor — es la misma lista para todo el bot, definida en la variable de entorno `AUTHORIZED_USER_IDS` (uno o varios IDs separados por coma).
+## Arquitectura
 
----
-
-## 🧱 Arquitectura
-
-```
+```text
 src/
-├── index.js              → Punto de entrada. Carga comandos y eventos automáticamente.
-├── config.js             → Variables de entorno. El bot no arranca si falta alguna.
-├── deploy-commands.js    → Script para registrar slash commands en Discord.
-│
-├── commands/             → Un archivo = un comando slash
-│   ├── ping.js           → Diagnóstico de latencia
-│   ├── getcode.js        → Envía el código admin por DM (solo autorizados)
-│   ├── setlogchannel.js  → Configura el canal donde se anuncian logs
-│   └── screenshot.js     → Captura tierlist / armas / arma / logs como imagen
-│
-├── events/               → Un archivo = un evento de Discord
-│   ├── ready.js          → Genera el primer código, arranca el cron de 24h y el watcher
-│   └── interactionCreate.js → Despacha slash commands y autocompletados
-│
-├── services/             → Lógica de negocio y conexiones externas
-│   ├── supabase.js       → Cliente Supabase (singleton, service_role)
-│   ├── adminCode.js      → Genera y rota el código admin cada 24h
-│   ├── botConfig.js      → Configuración persistente en Supabase (ej. canal de logs)
-│   ├── logWatcher.js     → Suscripción Realtime: publica/edita embeds de logs
-│   ├── tierlist.js       → Carga filas/items de la tierlist
-│   ├── weapons.js        → Busca armas (autocomplete), carga ficha+rangos y catálogo
-│   └── logs.js           → Carga logs recientes o un log específico por ID
-│
+├── commands/
+│   ├── adminrole.js
+│   ├── guidesforum.js
+│   ├── ping.js
+│   ├── screenshot.js
+│   └── setlogchannel.js
+├── events/
+│   ├── interactionCreate.js
+│   ├── messageDelete.js
+│   ├── threadDelete.js
+│   └── ready.js
+├── services/
+│   ├── audit.js
+│   ├── botConfig.js
+│   ├── deletionSuppressor.js
+│   ├── guideForumWorker.js
+│   ├── logPublication.js
+│   ├── logWatcher.js
+│   ├── publicationRecovery.js
+│   ├── siteTheme.js
+│   └── ...lectores de Supabase
 └── utils/
-    ├── embeds.js              → Builders de embeds de Discord
-    ├── isAuthorized.js        → Comprueba si un usuario está en la lista autorizada
-    ├── fonts.js               → Registra las fuentes bundleadas para canvas
-    ├── renderTierlist.js      → Dibuja la imagen de una columna de la tierlist
-    ├── renderTierlistFull.js  → Dibuja las 3 columnas juntas en una sola imagen
-    ├── renderWeapon.js        → Dibuja la ficha de un rango de arma (stats/habilidades/receta)
-    ├── renderWeaponCatalog.js → Dibuja el catálogo de armas (grilla nombre+imagen por categoría)
-    ├── renderLogs.js          → Dibuja la lista de logs recientes
-    └── renderLogDetail.js     → Dibuja el contenido completo de un log (mobs, items, descripción)
-
-sql/
-└── bot_tables.sql        → Tablas que este bot necesita en Supabase (admin_codes, bot_config)
+    ├── guideForumEmbeds.js
+    ├── logMessages.js
+    ├── mediaAttachments.js
+    ├── renderWorkbench.js
+    └── ...renderizadores Canvas
 ```
 
----
+La migración compartida está en:
 
-## ⚙️ Instalación (resumen)
+```text
+sql/migration_021_discord_auth_and_forum.sql
+```
 
-1. **Supabase**: ejecuta `sql/bot_tables.sql` en el SQL Editor de tu proyecto.
-2. **Discord**: crea una aplicación en [discord.com/developers/applications](https://discord.com/developers/applications) → pestaña **Bot** → copia el token (`DISCORD_TOKEN`) → **General Information** → copia el Application ID (`DISCORD_CLIENT_ID`) → **OAuth2 → URL Generator** con scopes `bot` + `applications.commands` y permisos `Send Messages`, `Embed Links`, `Attach Files`, `View Channel` para generar el link de invitación.
-3. **IDs**: activa el Modo Desarrollador en Discord y copia el ID del servidor (`DISCORD_GUILD_ID`) y tu propio ID de usuario (`AUTHORIZED_USER_IDS`, separa varios con coma).
-4. **Variables de entorno** — crea un `.env` con: `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `AUTHORIZED_USER_IDS`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, y opcionalmente `SITE_URL` (aparece enlazada en los embeds de logs). Nunca subas este archivo a GitHub.
-5. **Instalar y registrar comandos**:
-   ```bash
-   npm install
-   npm run deploy   # registra los slash commands en Discord
-   ```
-6. **Ejecutar**: `npm run dev` en local (se reinicia solo al cambiar archivos), o sube el repo a [Railway](https://railway.app) → New Project → Deploy from GitHub → agrega las mismas variables de entorno en **Variables**. Railway detecta `"start": "node src/index.js"` y despliega automáticamente; cada push a GitHub redespliega solo.
+## Variables de entorno
 
-> 📌 `npm run deploy` sobreescribe el set completo de comandos en Discord con lo que exista en `src/commands/` en ese momento — no acumula comandos viejos.
+```env
+DISCORD_TOKEN=
+DISCORD_CLIENT_ID=
+DISCORD_GUILD_ID=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+SITE_URL=https://empity001.github.io/culones-rpg/
+GUIDE_JOB_POLL_MS=15000
+GUIDE_JOB_MAX_ATTEMPTS=5
+```
 
-### Agregar un comando o evento nuevo
+No uses `AUTHORIZED_USER_IDS`. No incluyas el token, el Client Secret ni la service role en GitHub.
 
-- **Comando**: crea `src/commands/micomando.js` exportando `data` y `execute` (y `autocomplete` si lo necesita) → corre `npm run deploy`. No hay que tocar `index.js`.
-- **Evento**: crea `src/events/mievento.js` exportando `name`, `once` y `execute` → se carga solo al reiniciar.
+## Instalación
 
+```bash
+npm install
+npm run deploy
+npm start
+```
 
-## Nota QA screenshots
+`npm run deploy` registra todos los comandos en el servidor indicado por `DISCORD_GUILD_ID` y reemplaza el conjunto anterior. Los comandos que configuran canales (`/setlogchannel` y `/guidesforum set`) también requieren que el bot tenga **Gestionar roles**, porque Discord usa ese permiso para editar los overwrites del canal, además de **Gestionar canales** y los permisos de envío/hilos indicados.
 
-El renderer de `/screenshot logs ver:<log>` también limpia valores legacy guardados como JSON en `equipment` de mobs y `obtained_from` de items normales, para evitar que Discord muestre arrays JSON crudos en la imagen.
+Después del primer despliegue ejecuta:
 
-## Emoji en imágenes generadas
+```text
+/adminrole set rol:@AdministradoresWeb
+/setlogchannel canal:#logs
+/guidesforum set canal:#guias
+```
 
-Los renderers de canvas usan `Liberation Sans` para el texto y `Noto Color Emoji` para los emoji. La fuente de emoji se instala mediante la dependencia `@fontsource/noto-emoji`, por lo que también funciona en Railway/Linux sin depender de fuentes del sistema. El helper `src/utils/emojiText.js` divide las cadenas mixtas para evitar cuadros vacíos o texto invisible.
+Consulta `GUIA_DESPLIEGUE_DISCORD_AUTH.md` en el proyecto web para el orden completo de Supabase Auth, Edge Functions, SQL, Railway y GitHub Pages.
+
+## Validación
+
+Antes de desplegar:
+
+```bash
+find src -name '*.js' -print0 | xargs -0 -n1 node --check
+npm audit
+```
+
+El bot solicita `Guilds` y `GuildMessages`. `GuildMessages` se usa únicamente para recibir eventos de eliminación y recuperar mensajes o hilos propios; no lee el contenido de los mensajes. No necesita ni solicita `Message Content`.

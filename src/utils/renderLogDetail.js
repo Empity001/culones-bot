@@ -6,23 +6,24 @@ import { createCanvas } from '@napi-rs/canvas';
 import { ensureFonts, FONT } from './fonts.js';
 import { splitItems, formatLibreForCanvas, measureLibreHeight, measureLibreTitleHeight, formatEquipmentForCanvas, formatSourceForCanvas } from './libreFields.js';
 import { fillTextWithEmoji, measureTextWithEmoji } from './emojiText.js';
+import { getRenderPalette, themeRgba } from '../services/siteTheme.js';
 
 // ── Tokens de diseño (mismo sistema que los otros renderers) ─────────────────
-const BG_COLOR    = '#0c0a14';
-const BORDER_COLOR = 'rgba(255,255,255,0.08)';
-const GOLD        = '#f3b73a';
-const CYAN        = '#4dd4e8';
-const MAGENTA     = '#ff3d8e';
-const GREEN       = '#38e07a';
-const INK_100     = '#f4f1fb';
-const INK_400     = '#9a92b8';
-const INK_600     = 'rgba(255,255,255,0.35)';
+let BG_COLOR = '#090612';
+let BORDER_COLOR = 'rgba(169,133,255,0.18)';
+let GOLD = '#d6b56f';
+let CYAN = '#a985ff';
+let MAGENTA = '#ec72d3';
+let GREEN = '#38e07a';
+let INK_100 = '#f6f1ff';
+let INK_400 = '#aaa2c1';
+let INK_600 = 'rgba(220,208,244,0.52)';
 
 const CANVAS_W = 680;
 const PADDING  = 20;
 
 const RELEVANCE_COLOR = {
-  low:      '#9a92b8',
+  low:      '#aaa2c1',
   normal:   CYAN,
   high:     GOLD,
   critical: MAGENTA,
@@ -33,6 +34,23 @@ const RELEVANCE_LABEL = {
   high:     'Alta',
   critical: 'Crítica',
 };
+
+function applyRenderTheme() {
+  const theme = getRenderPalette();
+  BG_COLOR = theme.bg;
+  BORDER_COLOR = themeRgba(theme.primary, 0.18);
+  GOLD = theme.accent;
+  CYAN = theme.primary;
+  MAGENTA = theme.event;
+  GREEN = theme.confirmation;
+  INK_100 = theme.text;
+  INK_400 = theme.muted;
+  INK_600 = themeRgba(theme.muted, 0.52);
+  RELEVANCE_COLOR.low = theme.muted;
+  RELEVANCE_COLOR.normal = theme.primary;
+  RELEVANCE_COLOR.high = theme.warning;
+  RELEVANCE_COLOR.critical = theme.danger;
+}
 
 function truncate(str, max) {
   if (!str) return '';
@@ -94,6 +112,7 @@ function sectionHeader(ctx, label, color, x, y, w) {
  * @returns {Buffer}
  */
 export function renderLogDetailImage(log, serverName = 'Culones RPG') {
+  applyRenderTheme();
   ensureFonts();
 
   const contentW = CANVAS_W - PADDING * 2;
@@ -167,7 +186,7 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
 
   // ── Header ────────────────────────────────────────────────────────────────
   const HEADER_H = 56;
-  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fillStyle = 'rgba(124,92,255,0.10)';
   ctx.fillRect(0, 0, CANVAS_W, HEADER_H);
   ctx.strokeStyle = `${GOLD}66`;
   ctx.lineWidth = 1;
@@ -356,13 +375,13 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
     y += 4;
   }
 
-  // ── Bloques libres ────────────────────────────────────────────────────────
+  // ── Extras ────────────────────────────────────────────────────────
   // Bug 1+2+4 fix: sección separada con card dinámica por cada bloque libre,
   // parseando obtained_from como JSON (nunca como texto plano).
   // Usamos violeta como color de acento para diferenciarlos visualmente.
   const LIBRE_COLOR = '#9a72f5'; // violeta
   if (libres.length > 0) {
-    y = sectionHeader(ctx, `BLOQUES LIBRES (${libres.length})`, LIBRE_COLOR, PADDING, y, contentW);
+    y = sectionHeader(ctx, `EXTRAS (${libres.length})`, LIBRE_COLOR, PADDING, y, contentW);
 
     for (const libre of libres) {
       const canvasLines = formatLibreForCanvas(libre);
@@ -385,7 +404,7 @@ export function renderLogDetailImage(log, serverName = 'Culones RPG') {
       ctx.font         = `bold 13px ${FONT.sans}`;
       ctx.textAlign    = 'left';
       ctx.textBaseline = 'top';
-      const libreTitleLines = wrapText(ctx, libre.name || 'Bloque libre', contentW - 24);
+      const libreTitleLines = wrapText(ctx, libre.name || 'Extra', contentW - 24);
       for (let i = 0; i < libreTitleLines.length; i++) {
         ctx.fillText(libreTitleLines[i], PADDING + 12, y + 8 + i * 16);
       }

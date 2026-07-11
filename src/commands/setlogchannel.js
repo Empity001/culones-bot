@@ -1,58 +1,74 @@
-// src/commands/setlogchannel.js
-// Slash command: /setlogchannel #canal
-// Visible para todos, solo funciona para IDs autorizadas.
-
 import { SlashCommandBuilder, PermissionFlagsBits, ChannelType } from 'discord.js';
-import { isAuthorized } from '../utils/isAuthorized.js';
-import { setConfigValue, CONFIG_KEYS } from '../services/botConfig.js';
+import { updateGuildConfig } from '../services/botConfig.js';
 import { buildSuccessEmbed, buildErrorEmbed } from '../utils/embeds.js';
+import { requireOwnerOrAdministrator } from '../utils/permissions.js';
+import { getGuildConfig } from '../services/botConfig.js';
+import { recordDiscordAudit } from '../services/audit.js';
 
 export const data = new SlashCommandBuilder()
   .setName('setlogchannel')
-  .setDescription('Configura el canal donde se anuncian nuevos logs del juego (solo autorizados)')
-  .addChannelOption((option) =>
-    option
-      .setName('canal')
-      .setDescription('Canal de texto donde se publicarán los nuevos logs')
-      .addChannelTypes(ChannelType.GuildText)
-      .setRequired(true)
-  );
+  .setDescription('Configura el canal donde se anuncian los Logs')
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+  .addChannelOption(option => option
+    .setName('canal')
+    .setDescription('Canal de texto donde se publicarán los Logs')
+    .addChannelTypes(ChannelType.GuildText)
+    .setRequired(true));
 
 export async function execute(interaction) {
-  if (!isAuthorized(interaction.user.id)) {
-    await interaction.reply({
-      embeds: [buildErrorEmbed('No tienes permiso para usar este comando.')],
-      ephemeral: true,
-    });
-    return;
-  }
-
+  if (!(await requireOwnerOrAdministrator(interaction, buildErrorEmbed))) return;
   await interaction.deferReply({ ephemeral: true });
-
-  const channel = interaction.options.getChannel('canal');
-
-  const perms = channel.permissionsFor(interaction.guild.members.me);
-  if (!perms.has(PermissionFlagsBits.SendMessages)) {
-    await interaction.editReply({
-      embeds: [buildErrorEmbed(`No tengo permisos para escribir en ${channel}.`)],
-    });
+  const channel = interaction.options.getChannel('canal', true);
+  const me = interaction.guild.members.me || await interaction.guild.members.fetchMe();
+  const perms = channel.permissionsFor(me);
+  const required = [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.EmbedLinks,
+    PermissionFlagsBits.AttachFiles,
+    PermissionFlagsBits.CreatePublicThreads,
+    PermissionFlagsBits.SendMessagesInThreads,
+    PermissionFlagsBits.ReadMessageHistory,
+    PermissionFlagsBits.ManageThreads,
+    PermissionFlagsBits.ManageChannels,
+    PermissionFlagsBits.ManageRoles,
+  ];
+  const missing = required.filter(flag => !perms?.has(flag));
+  if (missing.length) {
+    await interaction.editReply({ embeds: [buildErrorEmbed(`No tengo todos los permisos necesarios en ${channel}. Necesito ver el canal, enviar mensajes, insertar enlaces, adjuntar archivos, crear y gestionar hilos, escribir dentro de ellos y gestionar los permisos del canal (Gestionar roles).`)] });
     return;
   }
-
   try {
-    await setConfigValue(CONFIG_KEYS.LOG_CHANNEL_ID, channel.id);
-    await interaction.editReply({
-      embeds: [
-        buildSuccessEmbed(
-          'Canal configurado',
-          `Los nuevos logs se anunciarán en ${channel}. 📢`
-        ),
-      ],
+    const previous = await getGuildConfig();
+    await channel.permissionOverwrites.edit(interaction.guild.roles.everyone.id, {
+      [PermissionFlagsBits.ViewChannel]: true,
+      [PermissionFlagsBits.ReadMessageHistory]: true,
+      [PermissionFlagsBits.AddReactions]: true,
+      [PermissionFlagsBits.SendMessagesInThreads]: false,
+      [PermissionFlagsBits.CreatePublicThreads]: false,
+      [PermissionFlagsBits.CreatePrivateThreads]: false,
+    }, { reason: `Canal de Logs configurado por ${interaction.user.tag}` });
+
+    await channel.permissionOverwrites.edit(me.id, {
+      [PermissionFlagsBits.ViewChannel]: true,
+      [PermissionFlagsBits.SendMessages]: true,
+      [PermissionFlagsBits.SendMessagesInThreads]: true,
+      [PermissionFlagsBits.CreatePublicThreads]: true,
+      [PermissionFlagsBits.EmbedLinks]: true,
+      [PermissionFlagsBits.AttachFiles]: true,
+      [PermissionFlagsBits.ReadMessageHistory]: true,
+      [PermissionFlagsBits.ManageThreads]: true,
+    }, { reason: 'Permisos del bot para publicar y mantener los Logs' });
+    await updateGuildConfig({ log_channel_id: channel.id, updated_by: interaction.user.id });
+    await recordDiscordAudit(interaction, {
+      action: 'log_channel_changed',
+      description: `${interaction.member?.displayName || interaction.user.username} configuró #${channel.name} como canal oficial de Logs y aplicó permisos de hilo de solo lectura.`,
+      entityType: 'discord_log_channel', entityId: channel.id, entityName: channel.name,
+      oldValue: { channel_id: previous?.log_channel_id || null }, newValue: { channel_id: channel.id, channel_name: channel.name },
     });
-  } catch (err) {
-    console.error('[setlogchannel]', err);
-    await interaction.editReply({
-      embeds: [buildErrorEmbed('Error guardando la configuración. Revisa los logs.')],
-    });
+    await interaction.editReply({ embeds: [buildSuccessEmbed('Canal de Logs configurado', `${interaction.user} configuró ${channel} como canal oficial de Logs.`)] });
+  } catch (error) {
+    console.error('[setlogchannel]', error);
+    await interaction.editReply({ embeds: [buildErrorEmbed(`No se pudo guardar el canal: ${error.message}`)] });
   }
 }
