@@ -179,3 +179,4 @@ npm audit
 ```
 
 El bot solicita `Guilds` y `GuildMessages`. `GuildMessages` se usa únicamente para recibir eventos de eliminación y recuperar mensajes o hilos propios; no lee el contenido de los mensajes. No necesita ni solicita `Message Content`.
+
