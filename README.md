@@ -179,3 +179,7 @@ npm audit
 ```
 
 El bot solicita `Guilds` y `GuildMessages`. `GuildMessages` se usa únicamente para recibir eventos de eliminación y recuperar mensajes o hilos propios; no lee el contenido de los mensajes. No necesita ni solicita `Message Content`.
+
+### Visibilidad de Logs
+
+Ejecuta `sql/migration_022_log_visibility.sql`. Los anuncios nuevos mencionan `@everyone` usando la bandera silenciosa de Discord, y el watcher elimina de Discord los Logs despublicados.

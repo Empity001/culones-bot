@@ -124,7 +124,18 @@ export async function sweepPublicationIntegrity(client) {
     if (missing) await markGuideOutdated(publication.guide_id, `Falta el mensaje ${missing} de la publicación. Pulsa “Actualizar en foro” para reconstruirlo.`);
   }
 
+  const logIds = (logPubs || []).map(publication => publication.log_id).filter(Boolean);
+  const { data: logRows, error: logStateError } = logIds.length
+    ? await supabase.from('logs').select('id,published').in('id', logIds)
+    : { data: [], error: null };
+  if (logStateError) console.warn('[Recovery] No se pudo revisar la visibilidad de Logs:', logStateError.message);
+  const logPublished = new Map((logRows || []).map(row => [String(row.id), row.published !== false]));
+
   for (const publication of logPubs || []) {
+    if (logPublished.get(String(publication.log_id)) === false) {
+      await requestLogSyncById(client, publication.log_id, 0).catch(error => console.warn(`[Recovery] No se pudo retirar Log oculto ${publication.log_id}:`, error.message));
+      continue;
+    }
     let damaged = false;
     const channel = publication.channel_id ? await client.channels.fetch(publication.channel_id).catch(() => null) : null;
     if (!channel?.isTextBased?.()) damaged = true;

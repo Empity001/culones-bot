@@ -127,13 +127,22 @@ async function getLogChannel(client) {
 }
 
 async function syncLogPublication(client, log) {
+  const publication = await getPublication(log.id);
+  if (log?.published === false) {
+    if (publication) {
+      await deleteDiscordPublication(client, publication);
+      await deletePublication(log.id);
+      console.log(`[LogWatcher] 📴 “${log.title}” está oculto; su publicación de Discord fue eliminada.`);
+    }
+    return;
+  }
+
   const channel = await getLogChannel(client);
   if (!channel?.isTextBased?.()) return;
   await ensureLogChannelThreadPerms(channel);
   const { category, mobs, items } = await loadLogData(log);
   const specs = await buildLogMessageSpecs(log, category, mobs, items);
   const contentHash = createHash('sha256').update(JSON.stringify({ log, category, mobs, items })).digest('hex');
-  const publication = await getPublication(log.id);
   if (!publication) {
     await publishFresh(channel, log, specs, contentHash);
     return;
@@ -147,6 +156,7 @@ async function sendSpec(target, spec) {
     files: spec.files || [],
     allowedMentions: spec.allowedMentions || { parse: [] },
   };
+  if (spec.flags != null) payload.flags = spec.flags;
   if (spec.content != null) payload.content = spec.content;
   return target.send(payload);
 }

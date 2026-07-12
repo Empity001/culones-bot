@@ -36,7 +36,7 @@ export async function execute(interaction) {
   ];
   const missing = required.filter(flag => !perms?.has(flag));
   if (missing.length) {
-    await interaction.editReply({ embeds: [buildErrorEmbed(`No tengo todos los permisos necesarios en ${channel}. Necesito ver el canal, enviar mensajes, insertar enlaces, adjuntar archivos, crear y gestionar hilos, escribir dentro de ellos, mencionar @everyone de forma silenciosa y gestionar los permisos del canal (Gestionar roles).`)] });
+    await interaction.editReply({ embeds: [buildErrorEmbed(`No tengo todos los permisos necesarios en ${channel}. Necesito ver el canal, enviar mensajes, insertar enlaces, adjuntar archivos, crear y gestionar hilos, escribir dentro de ellos, mencionar @everyone y suprimir la notificación del mensaje y gestionar los permisos del canal (Gestionar roles).`)] });
     return;
   }
   try {

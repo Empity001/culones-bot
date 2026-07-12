@@ -371,5 +371,13 @@ Problemas conocidos:
 
 - Cada rango del foro comienza con un separador de texto normal y combina su imagen con la descripción en un solo embed.
 - Los renders de fabricación usan una interfaz compacta inspirada en las mesas de Minecraft, sin grandes espacios vacíos.
-- Los anuncios nuevos de Logs vuelven a usar `@silent @everyone`; `/setlogchannel` garantiza el permiso `MentionEveryone` para el bot.
+- Los anuncios nuevos de Logs mencionan `@everyone` con la bandera `SuppressNotifications`; `/setlogchannel` garantiza el permiso `MentionEveryone` para el bot.
 - Los payloads de sincronización admiten mensajes normales sin embed además de mensajes con embeds y adjuntos.
+
+## Sesión — visibilidad de Logs y mención silenciosa (12 Jul 2026)
+
+- El anuncio usa `@everyone` con `MessageFlags.SuppressNotifications`; `@silent` no se manda como texto.
+- El watcher no publica Logs con `published = false` y elimina cualquier publicación persistente que aún exista.
+- La cola `discord_deletion_queue` garantiza la limpieza aunque el bot esté apagado.
+- `/screenshot logs` solo consulta Logs públicos.
+- Migración requerida: `sql/migration_022_log_visibility.sql`.

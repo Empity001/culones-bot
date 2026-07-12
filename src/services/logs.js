@@ -10,7 +10,7 @@ import { supabase } from './supabase.js';
  */
 export async function loadRecentLogs(limit = 10) {
   const [logsRes, catsRes] = await Promise.all([
-    supabase.from('logs').select('*').order('created_at', { ascending: false }).limit(limit),
+    supabase.from('logs').select('*').eq('published', true).order('created_at', { ascending: false }).limit(limit),
     supabase.from('categories').select('*'),
   ]);
 
@@ -32,7 +32,7 @@ export async function loadRecentLogs(limit = 10) {
  */
 export async function loadLogById(logId) {
   const [logRes, catsRes, mobsRes, itemsRes] = await Promise.all([
-    supabase.from('logs').select('*').eq('id', logId).single(),
+    supabase.from('logs').select('*').eq('id', logId).eq('published', true).single(),
     supabase.from('categories').select('*'),
     supabase.from('log_mobs').select('*').eq('log_id', logId).order('sort_order', { ascending: true }),
     supabase.from('log_items').select('*').eq('log_id', logId).order('sort_order', { ascending: true }),

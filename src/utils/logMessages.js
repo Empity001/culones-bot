@@ -1,4 +1,4 @@
-import { EmbedBuilder } from 'discord.js';
+import { EmbedBuilder, MessageFlags } from 'discord.js';
 import { splitItems, parseLibreFields, formatEquipmentForCanvas, formatSourceForCanvas } from './libreFields.js';
 import { prepareDiscordImage } from './mediaAttachments.js';
 import { config } from '../config.js';
@@ -194,11 +194,12 @@ export async function buildLogMessageSpecs(log, category, mobs = [], items = [])
   return {
     summary: {
       key: 'summary',
-      content: '@silent @everyone',
+      content: '@everyone',
       embeds: [summary],
       files: summaryFiles,
       imageHash: cover?.hash || null,
       allowedMentions: { parse: ['everyone'] },
+      flags: MessageFlags.SuppressNotifications,
     },
     entries,
   };
