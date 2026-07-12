@@ -1,7 +1,7 @@
 import { ChannelType, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
-import { executeAdminRole } from './adminrole.js';
-import { executeGuidesForum } from './guidesforum.js';
-import { executeLogChannel } from './setlogchannel.js';
+import { executeAdminRole } from '../command-handlers/adminrole.js';
+import { executeGuidesForum } from '../command-handlers/guidesforum.js';
+import { executeLogChannel } from '../command-handlers/setlogchannel.js';
 import { buildErrorEmbed } from '../utils/embeds.js';
 import { requireOwnerOrAdministrator } from '../utils/permissions.js';
 

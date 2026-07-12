@@ -12,9 +12,7 @@ Bot exclusivo del servidor oficial de Culones RPG. Conecta Discord con la web y 
 | `/screenshot guia` | Genera una imagen por rango | Cualquiera |
 | `/screenshot kits` | Genera los Kits recomendados | Cualquiera |
 | `/screenshot logs` | Genera la lista o el detalle de un Log | Cualquiera |
-| `/config logs set/view/clear` | Configura el canal de Logs y sus hilos de solo lectura | Propietario o `Administrator` |
-| `/config admin set/view/clear` | Configura el único rol que concede administración web | Propietario o `Administrator` |
-| `/config guias set/view/clear` | Configura el foro de Guías | Propietario o `Administrator` |
+| `/config logs|guias|admin set|view|clear` | Configura Logs, foro de Guías y rol administrativo desde un solo comando | Propietario o `Administrator` |
 
 `/getcode` ya no existe. El acceso administrativo se realiza desde la web mediante Discord OAuth y el rol elegido con `/config admin set`.
 
@@ -115,11 +113,12 @@ Discord permite una reacción nativa predeterminada por foro, pero Culones RPG a
 ```text
 src/
 ├── commands/
-│   ├── adminrole.js
 │   ├── config.js
-│   ├── guidesforum.js
 │   ├── ping.js
-│   ├── screenshot.js
+│   └── screenshot.js
+├── command-handlers/
+│   ├── adminrole.js
+│   ├── guidesforum.js
 │   └── setlogchannel.js
 ├── events/
 │   ├── interactionCreate.js
@@ -173,7 +172,7 @@ npm run deploy
 npm start
 ```
 
-`npm run deploy` registra todos los comandos en el servidor indicado por `DISCORD_GUILD_ID` y reemplaza el conjunto anterior. Los comandos que configuran canales (`/config logs set` y `/config guias set`) también requieren que el bot tenga **Gestionar roles**, porque Discord usa ese permiso para editar los overwrites del canal, además de **Gestionar canales** y los permisos de envío/hilos indicados.
+`npm run deploy` registra todos los comandos en el servidor indicado por `DISCORD_GUILD_ID` y reemplaza el conjunto anterior. La configuración vive compactada bajo `/config`: `logs`, `guias` y `admin` son grupos internos, no comandos sueltos. Los grupos que configuran canales (`/config logs set` y `/config guias set`) también requieren que el bot tenga **Gestionar roles**, porque Discord usa ese permiso para editar los overwrites del canal, además de **Gestionar canales** y los permisos de envío/hilos indicados.
 
 Después del primer despliegue ejecuta:
 

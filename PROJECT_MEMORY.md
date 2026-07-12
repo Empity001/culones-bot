@@ -8,6 +8,7 @@
 - `src/utils/logEmbeds.js` y el antiguo `buildLogEmbed` fueron retirados por no tener consumidores. El único constructor del flujo automático es `src/utils/logMessages.js`.
 - `embeds.js` conserva únicamente respuestas genéricas de éxito/error, también tematizadas y truncadas de forma segura.
 - Se retiraron helpers de configuración y búsqueda de Kits que no utilizaba ningún comando.
+- La configuración del bot quedó compactada bajo `/config logs|guias|admin set|view|clear`; los handlers internos viven en `src/command-handlers` para que `src/commands` solo contenga comandos registrables.
 - `npm ci`, `npm ls`, imports de runtime, renderizadores y workers pasan correctamente; `npm audit` reportó 0 vulnerabilidades durante la instalación.
 
 ## Pendiente externo
