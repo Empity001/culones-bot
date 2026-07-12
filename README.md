@@ -33,6 +33,9 @@ Cada elemento enlaza al punto exacto de la página mediante `log`, `tab` y `entr
 
 El bot guarda un `message_map` y un `message_order` persistentes. Al editar el contenido:
 
+- una sincronización fallida se reintenta hasta tres veces con espera incremental;
+- el barrido de integridad recupera publicaciones dañadas y Logs públicos que nunca alcanzaron a crear su primer mapeo;
+- el contenido extenso se divide por elemento y continuación respetando los límites de Discord.
 - Edita mensajes existentes por ID de elemento.
 - Crea los nuevos.
 - Elimina los que ya no existen.
@@ -82,6 +85,18 @@ Las imágenes estáticas de hasta 64×64 se tratan como pixel art:
 La imagen escalada se adjunta directamente a Discord; no se almacena permanentemente en Supabase ni en Railway. Las imágenes grandes se envían sin ese tratamiento.
 
 Las Mesas de trabajo se renderizan como interfaces visuales de Minecraft, acompañadas por una versión textual de materiales y cantidades.
+
+## Sistema visual de Discord
+
+Las publicaciones automáticas comparten una composición visual única y toman sus colores del tema configurado en la web:
+
+- Los Logs comienzan con un resumen compacto y continúan con fichas separadas para mobs, items y Extras.
+- Las imágenes de fichas se muestran como miniaturas para conservar una lectura rápida; las portadas y recursos visuales mantienen formato panorámico.
+- Las Guías separan claramente cada rango y organizan descripción, estadísticas, habilidades, recursos y fabricación por bloques.
+- Los métodos de fabricación conservan la lectura de Minecraft dentro de un marco negro, morado y dorado propio de Culones RPG.
+- Mesa de crafteo, horno normal, alto horno, ahumador, mesa de herrería e intercambio tienen composiciones específicas.
+- El resultado de cada receta usa un slot destacado y la versión textual conserva cantidades y enlaces a Guías relacionadas.
+- Los textos extensos se dividen en continuaciones sin superar los límites de Discord.
 
 ## Screenshots
 
@@ -174,9 +189,13 @@ Consulta `GUIA_DESPLIEGUE_DISCORD_AUTH.md` en el proyecto web para el orden comp
 Antes de desplegar:
 
 ```bash
+npm ci
+npm ls --depth=0
 find src -name '*.js' -print0 | xargs -0 -n1 node --check
 npm audit
 ```
+
+El flujo automático activo se construye en `src/utils/logMessages.js`. `src/utils/embeds.js` contiene solo las respuestas genéricas de comandos; la implementación legacy de embeds monolíticos fue retirada.
 
 El bot solicita `Guilds` y `GuildMessages`. `GuildMessages` se usa únicamente para recibir eventos de eliminación y recuperar mensajes o hilos propios; no lee el contenido de los mensajes. No necesita ni solicita `Message Content`.
 

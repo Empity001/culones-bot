@@ -1,12 +1,12 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { downloadImage } from './mediaAttachments.js';
+import { getRenderPalette, themeRgba } from '../services/siteTheme.js';
 
-const SLOT = 68;
-const SLOT_GAP = 5;
-const PANEL_MARGIN = 12;
-const HEADER_HEIGHT = 58;
+const SLOT = 72;
+const SLOT_GAP = 7;
+const CANVAS_WIDTH = 760;
 
-const COLORS = {
+const MINECRAFT = Object.freeze({
   panel: '#c6c6c6',
   panelLight: '#ffffff',
   panelMid: '#9b9b9b',
@@ -14,32 +14,44 @@ const COLORS = {
   slot: '#8b8b8b',
   slotDark: '#373737',
   slotLight: '#f3f3f3',
-  text: '#2d2d2d',
-  textMuted: '#4c4c4c',
-  result: '#9a8ab2',
-  resultBorder: '#694c90',
-};
+  text: '#262626',
+  muted: '#4b4b4b',
+});
 
 function modeLabel(method = {}) {
-  if (method.mode === 'crafting') return 'Mesa de crafteo';
+  if (method.mode === 'crafting') return 'MESA DE CRAFTEO';
   if (method.mode === 'furnace') {
-    if (method.furnace_type === 'blast_furnace') return 'Alto horno';
-    if (method.furnace_type === 'smoker') return 'Ahumador';
-    return 'Horno normal';
+    if (method.furnace_type === 'blast_furnace') return 'ALTO HORNO';
+    if (method.furnace_type === 'smoker') return 'AHUMADOR';
+    return 'HORNO NORMAL';
   }
-  if (method.mode === 'smithing') return 'Mesa de herrería';
-  return 'Intercambio';
+  if (method.mode === 'smithing') return 'MESA DE HERRERÍA';
+  return 'INTERCAMBIO';
 }
 
-function canvasSize(method = {}) {
-  if (method.mode === 'crafting') return { width: 600, height: 350 };
-  if (method.mode === 'furnace') return { width: 520, height: 390 };
-  if (method.mode === 'smithing') return { width: 620, height: 265 };
-  const count = Math.max(1, Math.min(6, (method.materials || []).length));
-  return { width: 760, height: count > 3 ? 340 : 245 };
+function canvasHeight(method = {}) {
+  if (method.mode === 'crafting') return 440;
+  if (method.mode === 'furnace') return 465;
+  if (method.mode === 'smithing') return 355;
+  return (method.materials || []).length > 3 ? 465 : 365;
 }
 
-function drawText(ctx, value, x, y, size = 22, align = 'left', weight = 'normal', color = COLORS.text) {
+function roundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawText(ctx, value, x, y, size = 22, align = 'left', weight = 'normal', color = MINECRAFT.text) {
   ctx.font = `${weight} ${size}px "Liberation Sans"`;
   ctx.textAlign = align;
   ctx.textBaseline = 'middle';
@@ -47,35 +59,64 @@ function drawText(ctx, value, x, y, size = 22, align = 'left', weight = 'normal'
   ctx.fillText(String(value || ''), x, y);
 }
 
-function drawPanel(ctx, width, height) {
-  const x = PANEL_MARGIN;
-  const y = PANEL_MARGIN;
-  const w = width - PANEL_MARGIN * 2;
-  const h = height - PANEL_MARGIN * 2;
-
-  ctx.fillStyle = COLORS.panel;
-  ctx.fillRect(x, y, w, h);
-
-  // Bisel grueso al estilo de las interfaces de Minecraft.
-  ctx.fillStyle = COLORS.panelLight;
-  ctx.fillRect(x, y, w, 5);
-  ctx.fillRect(x, y, 5, h);
-  ctx.fillStyle = COLORS.panelDark;
-  ctx.fillRect(x, y + h - 5, w, 5);
-  ctx.fillRect(x + w - 5, y, 5, h);
-
-  ctx.fillStyle = COLORS.panelMid;
-  ctx.fillRect(x + 5, y + h - 9, w - 10, 4);
-  ctx.fillRect(x + w - 9, y + 5, 4, h - 10);
+function shortName(value, max = 24) {
+  const text = String(value || '').trim();
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
-function drawHeader(ctx, title, method, width) {
-  drawText(ctx, title || 'Mesa de trabajo', 34, 37, 25, 'left', 'bold');
-  drawText(ctx, modeLabel(method), width - 34, 38, 17, 'right', 'bold', COLORS.textMuted);
-  ctx.fillStyle = '#8a8a8a';
-  ctx.fillRect(32, HEADER_HEIGHT, width - 64, 2);
-  ctx.fillStyle = '#e7e7e7';
-  ctx.fillRect(32, HEADER_HEIGHT + 2, width - 64, 2);
+function drawScene(ctx, width, height, title, method) {
+  const theme = getRenderPalette();
+  ctx.fillStyle = theme.bg;
+  ctx.fillRect(0, 0, width, height);
+
+  const glow = ctx.createLinearGradient(0, 0, width, height);
+  glow.addColorStop(0, themeRgba(theme.primary, 0.2));
+  glow.addColorStop(0.55, themeRgba(theme.primary, 0.03));
+  glow.addColorStop(1, themeRgba(theme.accent, 0.12));
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, width, height);
+
+  roundedRect(ctx, 18, 18, width - 36, height - 36, 16);
+  ctx.fillStyle = theme.panel;
+  ctx.fill();
+  ctx.strokeStyle = themeRgba(theme.primary, 0.68);
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.fillStyle = theme.primary;
+  ctx.fillRect(18, 18, 7, height - 36);
+  ctx.fillStyle = theme.accent;
+  ctx.fillRect(25, 18, 96, 4);
+
+  drawText(ctx, shortName(title || 'Método de fabricación', 42), 48, 52, 25, 'left', 'bold', theme.text);
+  drawText(ctx, 'MEJORA / FABRICACIÓN', 49, 78, 12, 'left', 'bold', theme.muted);
+
+  const badge = modeLabel(method);
+  ctx.font = 'bold 13px "Liberation Sans"';
+  const badgeWidth = Math.max(122, ctx.measureText(badge).width + 30);
+  roundedRect(ctx, width - badgeWidth - 42, 40, badgeWidth, 38, 7);
+  ctx.fillStyle = themeRgba(theme.primary, 0.16);
+  ctx.fill();
+  ctx.strokeStyle = themeRgba(theme.primarySoft, 0.65);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  drawText(ctx, badge, width - badgeWidth / 2 - 42, 59, 13, 'center', 'bold', theme.primarySoft);
+
+  drawMinecraftPanel(ctx, 42, 105, width - 84, height - 140);
+}
+
+function drawMinecraftPanel(ctx, x, y, width, height) {
+  ctx.fillStyle = MINECRAFT.panel;
+  ctx.fillRect(x, y, width, height);
+  ctx.fillStyle = MINECRAFT.panelLight;
+  ctx.fillRect(x, y, width, 6);
+  ctx.fillRect(x, y, 6, height);
+  ctx.fillStyle = MINECRAFT.panelDark;
+  ctx.fillRect(x, y + height - 6, width, 6);
+  ctx.fillRect(x + width - 6, y, 6, height);
+  ctx.fillStyle = MINECRAFT.panelMid;
+  ctx.fillRect(x + 6, y + height - 10, width - 12, 4);
+  ctx.fillRect(x + width - 10, y + 6, 4, height - 12);
 }
 
 async function loadSlotImage(slot, cache) {
@@ -84,8 +125,8 @@ async function loadSlotImage(slot, cache) {
   if (cache.has(url)) return cache.get(url);
   const promise = (async () => {
     try {
-      const dl = await downloadImage(url);
-      return dl ? await loadImage(dl.buffer) : null;
+      const downloaded = await downloadImage(url);
+      return downloaded ? await loadImage(downloaded.buffer) : null;
     } catch {
       return null;
     }
@@ -95,62 +136,74 @@ async function loadSlotImage(slot, cache) {
 }
 
 function drawSlotFrame(ctx, x, y, { result = false } = {}) {
-  const size = SLOT;
-  const fill = result ? COLORS.result : COLORS.slot;
-  const dark = result ? COLORS.resultBorder : COLORS.slotDark;
+  const theme = getRenderPalette();
+  const fill = result ? themeRgba(theme.primary, 0.42) : MINECRAFT.slot;
+  const dark = result ? theme.primary : MINECRAFT.slotDark;
 
   ctx.fillStyle = dark;
-  ctx.fillRect(x, y, size, size);
-  ctx.fillStyle = COLORS.slotLight;
-  ctx.fillRect(x + 4, y + 4, size - 4, size - 4);
+  ctx.fillRect(x, y, SLOT, SLOT);
+  ctx.fillStyle = MINECRAFT.slotLight;
+  ctx.fillRect(x + 4, y + 4, SLOT - 4, SLOT - 4);
   ctx.fillStyle = fill;
-  ctx.fillRect(x + 4, y + 4, size - 8, size - 8);
-  ctx.fillStyle = '#666666';
-  ctx.fillRect(x + size - 7, y + 4, 3, size - 8);
-  ctx.fillRect(x + 4, y + size - 7, size - 8, 3);
+  ctx.fillRect(x + 4, y + 4, SLOT - 8, SLOT - 8);
+  ctx.fillStyle = result ? themeRgba(theme.accent, 0.8) : '#666666';
+  ctx.fillRect(x + SLOT - 7, y + 4, 3, SLOT - 8);
+  ctx.fillRect(x + 4, y + SLOT - 7, SLOT - 8, 3);
 }
 
-async function drawSlot(ctx, slot, x, y, cache, { result = false } = {}) {
+async function drawSlot(ctx, slot, x, y, cache, { result = false, label = true } = {}) {
   drawSlotFrame(ctx, x, y, { result });
-  const img = await loadSlotImage(slot, cache);
-  if (img) {
+  const image = await loadSlotImage(slot, cache);
+  if (image) {
     ctx.imageSmoothingEnabled = false;
-    const max = 50;
-    let w;
-    let h;
-    if (img.width <= max && img.height <= max) {
-      const scale = Math.max(1, Math.floor(Math.min(max / img.width, max / img.height)));
-      w = Math.max(1, Math.min(max, img.width * scale));
-      h = Math.max(1, Math.min(max, img.height * scale));
+    const max = 53;
+    let width;
+    let height;
+    if (image.width <= max && image.height <= max) {
+      const scale = Math.max(1, Math.floor(Math.min(max / image.width, max / image.height)));
+      width = Math.max(1, Math.min(max, image.width * scale));
+      height = Math.max(1, Math.min(max, image.height * scale));
     } else {
-      const scale = Math.min(max / img.width, max / img.height);
-      w = Math.max(1, Math.round(img.width * scale));
-      h = Math.max(1, Math.round(img.height * scale));
+      const scale = Math.min(max / image.width, max / image.height);
+      width = Math.max(1, Math.round(image.width * scale));
+      height = Math.max(1, Math.round(image.height * scale));
     }
-    ctx.drawImage(img, Math.round(x + (SLOT - w) / 2), Math.round(y + (SLOT - h) / 2), w, h);
+    ctx.drawImage(image, Math.round(x + (SLOT - width) / 2), Math.round(y + (SLOT - height) / 2), width, height);
   } else if (slot?.name) {
-    drawText(ctx, String(slot.name).slice(0, 2).toUpperCase(), x + SLOT / 2, y + SLOT / 2, 20, 'center', 'bold', '#f5f5f5');
+    drawText(ctx, String(slot.name).slice(0, 2).toUpperCase(), x + SLOT / 2, y + SLOT / 2, 19, 'center', 'bold', '#f8f8f8');
   }
 
-  const qty = Math.max(1, Number(slot?.qty) || 1);
-  if ((slot?.name || slot?.image_url) && qty > 1) {
-    const label = String(qty);
-    drawText(ctx, label, x + SLOT - 7, y + SLOT - 10, 18, 'right', 'bold', '#1b1b1b');
-    drawText(ctx, label, x + SLOT - 9, y + SLOT - 12, 18, 'right', 'bold', '#ffffff');
+  const quantity = Math.max(1, Number(slot?.qty) || 1);
+  if ((slot?.name || slot?.image_url) && quantity > 1) {
+    const value = String(quantity);
+    drawText(ctx, value, x + SLOT - 8, y + SLOT - 10, 18, 'right', 'bold', '#161616');
+    drawText(ctx, value, x + SLOT - 10, y + SLOT - 12, 18, 'right', 'bold', '#ffffff');
   }
-}
 
-function shortName(value, max = 22) {
-  const text = String(value || '').trim();
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+  if (label && (slot?.name || result)) {
+    drawText(ctx, shortName(slot?.name || 'Resultado', 18), x + SLOT / 2, y + SLOT + 18, 13, 'center', 'bold', MINECRAFT.muted);
+  }
 }
 
 function drawArrow(ctx, x, y) {
-  drawText(ctx, '→', x, y, 54, 'center', 'bold', '#494949');
+  ctx.fillStyle = '#555555';
+  ctx.fillRect(x - 34, y - 7, 48, 14);
+  ctx.beginPath();
+  ctx.moveTo(x + 14, y - 24);
+  ctx.lineTo(x + 42, y);
+  ctx.lineTo(x + 14, y + 24);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawPlus(ctx, x, y) {
+  ctx.fillStyle = '#555555';
+  ctx.fillRect(x - 11, y - 3, 22, 6);
+  ctx.fillRect(x - 3, y - 11, 6, 22);
 }
 
 function methodsSlots(method) {
-  if (method.mode === 'crafting') return Array.from({ length: 9 }, (_, i) => method.grid?.[i] || {});
+  if (method.mode === 'crafting') return Array.from({ length: 9 }, (_, index) => method.grid?.[index] || {});
   if (method.mode === 'furnace' || method.mode === 'smithing') return method.inputs || [];
   return method.materials || [];
 }
@@ -166,91 +219,87 @@ function linkedSlotLabel(slot, fallback, guideLinkBuilder) {
 }
 
 export function recipeMethodText(method = {}, { guideLinkBuilder = null } = {}) {
-  const labels = {
-    trade: 'Intercambio',
-    crafting: 'Mesa de crafteo',
-    furnace: method.furnace_type === 'blast_furnace' ? 'Alto horno' : method.furnace_type === 'smoker' ? 'Ahumador' : 'Horno normal',
-    smithing: 'Mesa de herrería',
-  };
-  const lines = [`**Modo:** ${labels[method.mode] || 'Método de fabricación'}`];
-  const slots = methodsSlots(method).filter(s => s?.name || s?.image_url || s?.guide_link);
+  const lines = [`**${modeLabel(method)}**`];
+  const slots = methodsSlots(method).filter(slot => slot?.name || slot?.image_url || slot?.guide_link);
   slots.forEach((slot, index) => {
-    lines.push(`• ${linkedSlotLabel(slot, `Material ${index + 1}`, guideLinkBuilder)} ×${Math.max(1, Number(slot.qty) || 1)}`);
+    lines.push(`> ${linkedSlotLabel(slot, `Material ${index + 1}`, guideLinkBuilder)} ×${Math.max(1, Number(slot.qty) || 1)}`);
   });
   if (method.result?.name || method.result?.image_url || method.result?.guide_link) {
-    lines.push(`**Resultado:** ${linkedSlotLabel(method.result, 'Resultado', guideLinkBuilder)} ×${Math.max(1, Number(method.result?.qty) || 1)}`);
+    lines.push('', `**Resultado:** ${linkedSlotLabel(method.result, 'Resultado', guideLinkBuilder)} ×${Math.max(1, Number(method.result?.qty) || 1)}`);
   }
   return lines.join('\n');
 }
 
 async function drawCrafting(ctx, method, cache) {
-  const grid = Array.from({ length: 9 }, (_, i) => method.grid?.[i] || {});
-  const startX = 50;
-  const startY = 80;
-  for (let i = 0; i < 9; i++) {
-    await drawSlot(ctx, grid[i], startX + (i % 3) * (SLOT + SLOT_GAP), startY + Math.floor(i / 3) * (SLOT + SLOT_GAP), cache);
+  const grid = Array.from({ length: 9 }, (_, index) => method.grid?.[index] || {});
+  const startX = 78;
+  const startY = 132;
+  for (let index = 0; index < 9; index++) {
+    await drawSlot(
+      ctx,
+      grid[index],
+      startX + (index % 3) * (SLOT + SLOT_GAP),
+      startY + Math.floor(index / 3) * (SLOT + SLOT_GAP),
+      cache,
+      { label: false },
+    );
   }
-  drawArrow(ctx, 355, 187);
-  await drawSlot(ctx, method.result || {}, 442, 153, cache, { result: true });
-  drawText(ctx, shortName(method.result?.name || 'Resultado'), 476, 245, 17, 'center', 'bold');
+  drawArrow(ctx, 470, 251);
+  await drawSlot(ctx, method.result || {}, 590, 215, cache, { result: true });
 }
 
 async function drawFurnace(ctx, method, cache) {
   const inputs = method.inputs || [];
-  const slotX = 105;
-  await drawSlot(ctx, inputs[0] || {}, slotX, 82, cache);
-  drawText(ctx, '♨', slotX + SLOT / 2, 194, 34, 'center', 'bold', '#c85b23');
-  await drawSlot(ctx, inputs[1] || {}, slotX, 240, cache);
-  drawArrow(ctx, 300, 185);
-  await drawSlot(ctx, method.result || {}, 380, 151, cache, { result: true });
-  drawText(ctx, shortName(method.result?.name || 'Resultado'), 414, 246, 17, 'center', 'bold');
+  const slotX = 155;
+  await drawSlot(ctx, inputs[0] || {}, slotX, 135, cache);
+  await drawSlot(ctx, inputs[1] || {}, slotX, 290, cache);
+
+  ctx.fillStyle = '#d86a29';
+  ctx.beginPath();
+  ctx.moveTo(slotX + 36, 270);
+  ctx.quadraticCurveTo(slotX + 10, 245, slotX + 38, 220);
+  ctx.quadraticCurveTo(slotX + 28, 248, slotX + 54, 270);
+  ctx.closePath();
+  ctx.fill();
+
+  drawArrow(ctx, 430, 244);
+  await drawSlot(ctx, method.result || {}, 590, 208, cache, { result: true });
+  drawText(ctx, 'COMBUSTIBLE', slotX + SLOT / 2, 280, 11, 'center', 'bold', MINECRAFT.muted);
 }
 
 async function drawSmithing(ctx, method, cache) {
   const inputs = method.inputs || [];
-  const startX = 42;
-  const y = 105;
-  for (let i = 0; i < 3; i++) {
-    await drawSlot(ctx, inputs[i] || {}, startX + i * (SLOT + 26), y, cache);
-    if (i < 2) drawText(ctx, '+', startX + SLOT + 13 + i * (SLOT + 26), y + SLOT / 2, 26, 'center', 'bold', '#4a4a4a');
+  const positions = [75, 195, 315];
+  for (let index = 0; index < 3; index++) {
+    await drawSlot(ctx, inputs[index] || {}, positions[index], 165, cache);
+    if (index < 2) drawPlus(ctx, positions[index] + SLOT + 24, 201);
   }
-  drawArrow(ctx, 390, y + SLOT / 2);
-  await drawSlot(ctx, method.result || {}, 484, y, cache, { result: true });
-  drawText(ctx, shortName(method.result?.name || 'Resultado'), 518, 206, 17, 'center', 'bold');
+  drawArrow(ctx, 485, 201);
+  await drawSlot(ctx, method.result || {}, 600, 165, cache, { result: true });
 }
 
 async function drawTrade(ctx, method, cache) {
   const materials = (method.materials || []).slice(0, 6);
-  const columns = Math.min(3, Math.max(1, materials.length));
-  const startX = 42;
-  const startY = 82;
-  const rowGap = 38;
-
-  for (let i = 0; i < materials.length; i++) {
-    const col = i % columns;
-    const row = Math.floor(i / columns);
-    const x = startX + col * (SLOT + 38);
-    const y = startY + row * (SLOT + rowGap);
-    await drawSlot(ctx, materials[i], x, y, cache);
-    drawText(ctx, shortName(materials[i]?.name || `Material ${i + 1}`, 15), x + SLOT / 2, y + SLOT + 18, 14, 'center', 'bold');
-    if (col < columns - 1 && i < materials.length - 1) {
-      drawText(ctx, '+', x + SLOT + 19, y + SLOT / 2, 24, 'center', 'bold', '#4a4a4a');
-    }
+  const startX = 68;
+  const startY = 135;
+  for (let index = 0; index < materials.length; index++) {
+    const column = index % 3;
+    const row = Math.floor(index / 3);
+    const x = startX + column * 112;
+    const y = startY + row * 132;
+    await drawSlot(ctx, materials[index], x, y, cache);
+    if (column < 2 && index < materials.length - 1) drawPlus(ctx, x + SLOT + 20, y + SLOT / 2);
   }
-
-  drawArrow(ctx, 555, materials.length > 3 ? 170 : 118);
-  const resultY = materials.length > 3 ? 136 : 84;
-  await drawSlot(ctx, method.result || {}, 635, resultY, cache, { result: true });
-  drawText(ctx, shortName(method.result?.name || 'Resultado'), 669, resultY + SLOT + 22, 16, 'center', 'bold');
+  const centerY = materials.length > 3 ? 247 : 191;
+  drawArrow(ctx, 495, centerY);
+  await drawSlot(ctx, method.result || {}, 610, centerY - SLOT / 2, cache, { result: true });
 }
 
-export async function renderWorkbenchMethod(method = {}, title = 'Mesa de trabajo') {
-  const { width, height } = canvasSize(method);
-  const canvas = createCanvas(width, height);
+export async function renderWorkbenchMethod(method = {}, title = 'Método de fabricación') {
+  const height = canvasHeight(method);
+  const canvas = createCanvas(CANVAS_WIDTH, height);
   const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, width, height);
-  drawPanel(ctx, width, height);
-  drawHeader(ctx, title, method, width);
+  drawScene(ctx, CANVAS_WIDTH, height, title, method);
 
   const cache = new Map();
   if (method.mode === 'crafting') await drawCrafting(ctx, method, cache);

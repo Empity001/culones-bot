@@ -31,20 +31,3 @@ export async function updateGuildConfig(patch = {}) {
   if (error) throw new Error(`[BotConfig] Error guardando configuración: ${error.message}`);
   return data;
 }
-
-export async function getConfigValue(key) {
-  const cfg = await getGuildConfig();
-  if (!cfg) return null;
-  return cfg[key] ?? null;
-}
-
-export async function setConfigValue(key, value, updatedBy = null) {
-  return updateGuildConfig({ [key]: value, updated_by: updatedBy });
-}
-
-export const CONFIG_KEYS = {
-  LOG_CHANNEL_ID: 'log_channel_id',
-  ADMIN_ROLE_ID: 'admin_role_id',
-  GUIDES_FORUM_CHANNEL_ID: 'guides_forum_channel_id',
-  FORUM_REACTIONS: 'forum_reactions',
-};

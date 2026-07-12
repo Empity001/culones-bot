@@ -5,6 +5,7 @@ import { getGuildConfig } from './botConfig.js';
 import { getPublication, upsertPublication, deletePublication } from './logPublication.js';
 import { buildLogMessageSpecs } from '../utils/logMessages.js';
 import { suppressDiscordDeletion } from './deletionSuppressor.js';
+import { refreshRenderPalette } from './siteTheme.js';
 
 const syncStates = new Map();
 const deletionLocks = new Set();
@@ -32,7 +33,13 @@ export function startLogWatcher(client) {
 
 function enqueueLogSync(client, log, waitMs = 0) {
   if (!log?.id) return;
-  const current = syncStates.get(log.id) || { running: false, dirty: false, log: null, waitMs: 0 };
+  const current = syncStates.get(log.id) || {
+    running: false,
+    dirty: false,
+    log: null,
+    waitMs: 0,
+    failures: 0,
+  };
   current.log = log;
   current.dirty = true;
   current.waitMs = Math.max(current.waitMs || 0, Number(waitMs) || 0);
@@ -65,8 +72,16 @@ async function runSyncLoop(client, logId) {
       }
       try {
         await syncLogPublication(client, log);
+        state.failures = 0;
       } catch (error) {
-        console.error(`[LogWatcher] Error completo sincronizando ${logId}:`, error);
+        state.failures = Number(state.failures || 0) + 1;
+        if (state.failures <= 3) {
+          state.dirty = true;
+          state.waitMs = Math.max(state.waitMs || 0, 1000 * (2 ** (state.failures - 1)));
+          console.warn(`[LogWatcher] Reintento ${state.failures}/3 para ${logId}:`, error.message || error);
+        } else {
+          console.error(`[LogWatcher] Error completo sincronizando ${logId} después de 3 reintentos:`, error);
+        }
       }
     }
   } finally {
@@ -140,6 +155,7 @@ async function syncLogPublication(client, log) {
   const channel = await getLogChannel(client);
   if (!channel?.isTextBased?.()) return;
   await ensureLogChannelThreadPerms(channel);
+  await refreshRenderPalette();
   const { category, mobs, items } = await loadLogData(log);
   const specs = await buildLogMessageSpecs(log, category, mobs, items);
   const contentHash = createHash('sha256').update(JSON.stringify({ log, category, mobs, items })).digest('hex');

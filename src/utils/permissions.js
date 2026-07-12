@@ -2,22 +2,22 @@ import { PermissionFlagsBits } from 'discord.js';
 import { getGuildConfig } from '../services/botConfig.js';
 import { config } from '../config.js';
 
-export function isOfficialGuild(guildId) {
+function isOfficialGuild(guildId) {
   return Boolean(guildId && guildId === config.discord.guildId);
 }
 
-export function isOwnerOrAdministrator(interaction) {
+function isOwnerOrAdministrator(interaction) {
   if (!interaction.guild || !isOfficialGuild(interaction.guild.id)) return false;
   if (interaction.guild.ownerId === interaction.user.id) return true;
   return Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.Administrator));
 }
 
-export async function getConfiguredAdminRoleId() {
+async function getConfiguredAdminRoleId() {
   const cfg = await getGuildConfig().catch(() => null);
   return cfg?.admin_role_id || null;
 }
 
-export async function memberHasConfiguredAdminRole(guild, userId) {
+async function memberHasConfiguredAdminRole(guild, userId) {
   if (!guild || !isOfficialGuild(guild.id) || !userId) return false;
   const roleId = await getConfiguredAdminRoleId();
   if (!roleId) return false;

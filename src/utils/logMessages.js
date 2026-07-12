@@ -1,31 +1,27 @@
 import { EmbedBuilder, MessageFlags } from 'discord.js';
 import { splitItems, parseLibreFields, formatEquipmentForCanvas, formatSourceForCanvas } from './libreFields.js';
 import { prepareDiscordImage } from './mediaAttachments.js';
+import {
+  cleanText,
+  discordColor,
+  makeBrandedEmbed,
+  splitDiscordText,
+  truncateText,
+} from './discordPresentation.js';
 import { config } from '../config.js';
+import { getRenderPalette } from '../services/siteTheme.js';
 
-const RELEVANCE_COLOR = { low: 0x9a92b8, normal: 0x7c5cff, high: 0xf5c542, critical: 0xe84d4d };
 const RELEVANCE_LABEL = { low: 'Baja', normal: 'Normal', high: 'Alta', critical: 'Crítica' };
-const MAX_DESCRIPTION = 3900;
 
-function clean(value) { return String(value ?? '').trim(); }
-function truncate(value, max = 256) {
-  const text = clean(value);
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
-}
-function splitLongText(text, max = MAX_DESCRIPTION) {
-  const raw = clean(text);
-  if (!raw) return ['_Sin información adicional._'];
-  const chunks = [];
-  let rest = raw;
-  while (rest.length > max) {
-    let cut = rest.lastIndexOf('\n', max);
-    if (cut < max * 0.55) cut = rest.lastIndexOf(' ', max);
-    if (cut < max * 0.55) cut = max;
-    chunks.push(rest.slice(0, cut).trim());
-    rest = rest.slice(cut).trim();
-  }
-  if (rest) chunks.push(rest);
-  return chunks;
+function relevanceColor(relevance) {
+  const theme = getRenderPalette();
+  const colors = {
+    low: theme.muted,
+    normal: theme.primary,
+    high: theme.warning,
+    critical: theme.danger,
+  };
+  return discordColor(colors[relevance], theme.primary);
 }
 
 function baseUrl(logId, tab = null, entry = null) {
@@ -38,27 +34,33 @@ function baseUrl(logId, tab = null, entry = null) {
 function linesFromExtras(extraFields) {
   const source = Array.isArray(extraFields) ? extraFields : [];
   return source.flatMap(field => {
-    const key = clean(field?.key || field?.label || field?.name);
-    const value = clean(field?.value ?? field?.text ?? field?.content);
+    const key = cleanText(field?.key || field?.label || field?.name);
+    const value = cleanText(field?.value ?? field?.text ?? field?.content);
     if (!key && !value) return [];
-    return [key ? `**${key}:** ${value || '—'}` : value];
+    return [key ? `> **${key}:** ${value || '—'}` : `> ${value}`];
   });
 }
 
-async function makeSpecs({ keyBase, title, color, descriptionLines, imageUrl, imageName, url, footer }) {
-  const chunks = splitLongText(descriptionLines.filter(Boolean).join('\n'));
+function detailSection(lines) {
+  const visible = lines.filter(Boolean);
+  return visible.length ? visible.join('\n') : '_Sin información adicional._';
+}
+
+async function makeSpecs({ keyBase, eyebrow, title, color, descriptionLines, imageUrl, imageName, url, footer }) {
+  const chunks = splitDiscordText(descriptionLines.filter(Boolean).join('\n'));
   const image = imageUrl ? await prepareDiscordImage(imageUrl, imageName) : null;
-  return chunks.map((chunk, index) => {
+  return (chunks.length ? chunks : ['_Sin información adicional._']).map((chunk, index) => {
     const continued = index > 0;
-    const embed = new EmbedBuilder()
-      .setColor(color)
-      .setTitle(truncate(continued ? `${title} — continuación ${index + 1}` : title))
-      .setDescription(chunk)
-      .setFooter({ text: footer });
-    if (url) embed.setURL(url);
+    const embed = makeBrandedEmbed({
+      color,
+      title: continued ? `${title} · continuación ${index + 1}` : title,
+      description: continued ? chunk : `${eyebrow ? `-# ${eyebrow}\n` : ''}${chunk}`,
+      url,
+      footer,
+    });
     const files = [];
     if (!continued && image?.attachment) {
-      embed.setImage(image.imageRef);
+      embed.setThumbnail(image.imageRef);
       files.push(image.attachment);
     }
     return {
@@ -71,29 +73,35 @@ async function makeSpecs({ keyBase, title, color, descriptionLines, imageUrl, im
   });
 }
 
+function validDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 export async function buildLogMessageSpecs(log, category, mobs = [], items = []) {
-  const color = RELEVANCE_COLOR[log.relevance] ?? 0x7c5cff;
+  const color = relevanceColor(log.relevance);
   const catEmoji = category?.emoji || '📋';
   const catLabel = category?.label || log.category || 'Sin categoría';
   const { normalItems, libres } = splitItems(items);
   const summaryUrl = baseUrl(log.id);
   const cover = log.cover_image_url ? await prepareDiscordImage(log.cover_image_url, `log-${log.id}-cover`) : null;
+  const createdAt = validDate(log.created_at);
 
-  const summary = new EmbedBuilder()
-    .setColor(color)
-    .setTitle(truncate(`${catEmoji} ${log.title}`))
-    .setURL(summaryUrl)
-    .setDescription(truncate(log.description || 'Sin descripción.', 900))
-    .addFields(
-      { name: 'Categoría', value: `${catEmoji} ${catLabel}`, inline: true },
-      { name: 'Relevancia', value: RELEVANCE_LABEL[log.relevance] || clean(log.relevance) || 'Normal', inline: true },
-      { name: 'Fecha', value: `<t:${Math.floor(new Date(log.created_at).getTime() / 1000)}:f>`, inline: true },
-      { name: 'Contenido', value: `👾 ${mobs.length} mobs · 🗡️ ${normalItems.length} items · ✦ ${libres.length} Extras`, inline: false },
-      { name: 'Likes', value: `❤ ${Number(log.likes || 0)}`, inline: true },
-      { name: 'Detalles', value: 'Abre el hilo para consultar cada mob, item y Extra por separado.', inline: false },
-    )
-    .setFooter({ text: 'Culones RPG · Logs' })
-    .setTimestamp(new Date(log.updated_at || log.created_at));
+  const summary = makeBrandedEmbed({
+    color,
+    title: `${catEmoji} ${log.title}`,
+    description: `${truncateText(log.description || 'Sin descripción.', 1200)}\n\n[LEER LOG COMPLETO ↗](${summaryUrl})`,
+    url: summaryUrl,
+    footer: `Culones RPG · Logs · ${catLabel}`,
+    timestamp: validDate(log.updated_at || log.created_at),
+  }).addFields(
+    { name: 'Categoría', value: `${catEmoji} ${truncateText(catLabel, 950)}`, inline: true },
+    { name: 'Relevancia', value: RELEVANCE_LABEL[log.relevance] || cleanText(log.relevance) || 'Normal', inline: true },
+    { name: 'Publicado', value: createdAt ? `<t:${Math.floor(createdAt.getTime() / 1000)}:f>` : 'Sin fecha', inline: true },
+    { name: 'Contenido', value: `👾 ${mobs.length} mobs\n⚔️ ${normalItems.length} items\n✦ ${libres.length} extras`, inline: true },
+    { name: 'Comunidad', value: `❤️ ${Number(log.likes || 0)} likes`, inline: true },
+    { name: 'Navegación', value: 'Cada ficha incluye un enlace directo a su bloque en la web.', inline: true },
+  );
 
   const summaryFiles = [];
   if (cover?.attachment) {
@@ -105,26 +113,28 @@ export async function buildLogMessageSpecs(log, category, mobs = [], items = [])
 
   for (const mob of mobs) {
     const stats = [];
-    if (mob.health != null) stats.push(`**Vida:** ${mob.health}`);
-    if (mob.damage != null) stats.push(`**Daño:** ${mob.damage}`);
-    if (mob.armor != null) stats.push(`**Armadura:** ${mob.armor}`);
+    if (mob.health != null) stats.push(`❤️ **Vida:** ${mob.health}`);
+    if (mob.damage != null) stats.push(`⚔️ **Daño:** ${mob.damage}`);
+    if (mob.armor != null) stats.push(`🛡️ **Armadura:** ${mob.armor}`);
     const equipment = formatEquipmentForCanvas(mob.equipment);
+    const url = baseUrl(log.id, 'mobs', mob.id);
     const lines = [
-      stats.join(' · '),
-      mob.location ? `**Ubicación:** ${mob.location}` : '',
-      equipment ? `**Equipamiento:** ${equipment}` : '',
+      stats.length ? stats.join(' · ') : '',
+      mob.location ? `📍 **Ubicación:** ${mob.location}` : '',
+      equipment ? `🎒 **Equipamiento:** ${equipment}` : '',
       mob.description ? `\n${mob.description}` : '',
       ...linesFromExtras(mob.extra_fields),
-      `\n[Ver este mob en la página](${baseUrl(log.id, 'mobs', mob.id)})`,
+      `\n[VER MOB EN LA WEB ↗](${url})`,
     ];
     entries.push(...await makeSpecs({
       keyBase: `mob:${mob.id}`,
+      eyebrow: `MOB · ${catLabel}`,
       title: `👾 ${mob.name || 'Mob'}`,
       color,
       descriptionLines: lines,
       imageUrl: mob.image_url,
       imageName: `mob-${mob.id}`,
-      url: baseUrl(log.id, 'mobs', mob.id),
+      url,
       footer: `Culones RPG · ${log.title} · Mobs`,
     }));
   }
@@ -135,25 +145,32 @@ export async function buildLogMessageSpecs(log, category, mobs = [], items = [])
     if (item.tier) meta.push(`**Rango:** ${item.tier}`);
     if (item.damage != null) meta.push(`**Daño:** ${item.damage}`);
     const enchants = Array.isArray(item.enchantments)
-      ? item.enchantments.map(e => typeof e === 'string' ? e : [e?.name || e?.id, e?.level || e?.lvl].filter(Boolean).join(' ')).filter(Boolean).join(', ')
+      ? item.enchantments
+        .map(enchantment => typeof enchantment === 'string'
+          ? enchantment
+          : [enchantment?.name || enchantment?.id, enchantment?.level || enchantment?.lvl].filter(Boolean).join(' '))
+        .filter(Boolean)
+        .join(', ')
       : '';
     const source = formatSourceForCanvas(item.obtained_from);
+    const url = baseUrl(log.id, 'items', item.id);
     const lines = [
-      meta.join(' · '),
-      enchants ? `**Encantamientos:** ${enchants}` : '',
-      source ? `**Obtención:** ${source}` : '',
+      meta.length ? `> ${meta.join(' · ')}` : '',
+      enchants ? `✨ **Encantamientos:** ${enchants}` : '',
+      source ? `📦 **Obtención:** ${source}` : '',
       item.description ? `\n${item.description}` : '',
       ...linesFromExtras(item.extra_fields),
-      `\n[Ver este item en la página](${baseUrl(log.id, 'items', item.id)})`,
+      `\n[VER ITEM EN LA WEB ↗](${url})`,
     ];
     entries.push(...await makeSpecs({
       keyBase: `item:${item.id}`,
-      title: `🗡️ ${item.name || 'Item'}`,
+      eyebrow: `ITEM · ${catLabel}`,
+      title: `⚔️ ${item.name || 'Item'}`,
       color,
       descriptionLines: lines,
       imageUrl: item.image_url,
       imageName: `item-${item.id}`,
-      url: baseUrl(log.id, 'items', item.id),
+      url,
       footer: `Culones RPG · ${log.title} · Items`,
     }));
   }
@@ -162,33 +179,35 @@ export async function buildLogMessageSpecs(log, category, mobs = [], items = [])
     const parsed = parseLibreFields(extra);
     const lines = [];
     for (const field of parsed) {
-      const key = clean(field?.key);
-      const value = clean(field?.value);
-      if (key || value) lines.push(key ? `**${key}:** ${value || '—'}` : value);
+      const key = cleanText(field?.key);
+      const value = cleanText(field?.value);
+      if (key || value) lines.push(key ? `**${key}**\n${value || '—'}` : value);
       for (const sub of field?.subfields || []) {
-        const sk = clean(sub?.key);
-        const sv = clean(sub?.value);
-        if (sk || sv) lines.push(`> ${sk ? `**${sk}:** ` : ''}${sv || '—'}`);
+        const subKey = cleanText(sub?.key);
+        const subValue = cleanText(sub?.value);
+        if (subKey || subValue) lines.push(`> ${subKey ? `**${subKey}:** ` : ''}${subValue || '—'}`);
       }
     }
     if (extra.description) lines.push(`\n${extra.description}`);
-    lines.push(`\n[Ver este Extra en la página](${baseUrl(log.id, 'blocks', extra.id)})`);
+    const url = baseUrl(log.id, 'blocks', extra.id);
+    lines.push(`\n[VER EXTRA EN LA WEB ↗](${url})`);
     entries.push(...await makeSpecs({
       keyBase: `extra:${extra.id}`,
+      eyebrow: `EXTRA · ${catLabel}`,
       title: `✦ ${extra.name || 'Extra'}`,
       color,
-      descriptionLines: lines,
+      descriptionLines: [detailSection(lines)],
       imageUrl: extra.image_url,
       imageName: `extra-${extra.id}`,
-      url: baseUrl(log.id, 'blocks', extra.id),
+      url,
       footer: `Culones RPG · ${log.title} · Extras`,
     }));
   }
 
   const footerEmbed = new EmbedBuilder()
     .setColor(color)
-    .setDescription(`📖 [Consulta la versión completa, más detallada y con imágenes en la página.](${summaryUrl})`)
-    .setFooter({ text: 'Culones RPG · Fin del Log' });
+    .setDescription(`### FIN DEL LOG\nLa versión web conserva el contenido completo, las imágenes y los enlaces interactivos.\n\n[ABRIR ${truncateText(log.title, 80).toUpperCase()} ↗](${summaryUrl})`)
+    .setFooter({ text: 'Culones RPG · Logs' });
   entries.push({ key: 'footer', embeds: [footerEmbed], files: [] });
 
   return {

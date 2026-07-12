@@ -99,12 +99,30 @@ async function firstMissingMessage(thread, messageMap) {
 
 export async function sweepPublicationIntegrity(client) {
   console.log('[Recovery] Comprobando integridad de publicaciones persistentes…');
-  const [{ data: guidePubs, error: guideError }, { data: logPubs, error: logError }] = await Promise.all([
+  const [
+    { data: guidePubs, error: guideError },
+    { data: logPubs, error: logError },
+    { data: publishedLogs, error: publishedLogsError },
+  ] = await Promise.all([
     supabase.from('guide_forum_publications').select('guide_id,thread_id,starter_message_id,message_map,status').in('status', ['synced', 'synced_with_warnings', 'outdated']),
     supabase.from('log_discord_publications').select('log_id,channel_id,summary_message_id,thread_id,message_map'),
+    supabase.from('logs').select('id').eq('published', true),
   ]);
   if (guideError) console.warn('[Recovery] No se pudieron revisar Guías:', guideError.message);
   if (logError) console.warn('[Recovery] No se pudieron revisar Logs:', logError.message);
+  if (publishedLogsError) console.warn('[Recovery] No se pudieron localizar Logs pendientes:', publishedLogsError.message);
+
+  // Una caída durante la primera publicación antes no dejaba mapeo que
+  // revisar. Comparar ambos conjuntos permite recuperar también esos Logs sin
+  // tocar los que ya están publicados ni generar duplicados.
+  if (!logError && !publishedLogsError) {
+    const mappedLogIds = new Set((logPubs || []).map(row => String(row.log_id)));
+    for (const log of publishedLogs || []) {
+      if (!mappedLogIds.has(String(log.id))) {
+        await requestLogSyncById(client, log.id, 250);
+      }
+    }
+  }
 
   for (const publication of guidePubs || []) {
     if (!publication.thread_id) continue;
@@ -150,4 +168,3 @@ export async function sweepPublicationIntegrity(client) {
   }
   console.log('[Recovery] Comprobación de integridad terminada.');
 }
-

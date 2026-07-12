@@ -49,28 +49,3 @@ export async function loadKits() {
     items: normalizeKitItems(kit.items),
   }));
 }
-
-/**
- * Búsqueda por nombre para el autocompletado (por si en el futuro se
- * agrega un subcomando /screenshot kit <nombre> para uno solo).
- * @param {string} query
- */
-export async function searchKitsByName(query) {
-  let req = supabase
-    .from('kits')
-    .select('id, name')
-    .eq('published', true)
-    .order('name', { ascending: true })
-    .limit(25);
-
-  if (query && query.trim() !== '') {
-    req = req.ilike('name', `%${query.trim()}%`);
-  }
-
-  const { data, error } = await req;
-  if (error) {
-    console.error('[Kits] Error buscando kits:', error.message);
-    return [];
-  }
-  return data || [];
-}

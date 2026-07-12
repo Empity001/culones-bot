@@ -1,3 +1,20 @@
+# Sesión actual — Auditoría conjunta y recuperación robusta (12 Jul 2026)
+
+- Se validaron todos los módulos con Node 20+, dependencias reales, Canvas, Discord.js, Supabase y Axios.
+- `logWatcher.js` reintenta una sincronización fallida hasta tres veces con espera incremental.
+- `publicationRecovery.js` compara Logs públicos con `log_discord_publications`; recupera también publicaciones que fallaron antes de crear su primer mapeo.
+- `logMessages.js` usa la paleta compartida, reduce el margen de descripción y limita el footer para respetar el total de 6000 caracteres por embed.
+- Una prueba sintética de Log extremo generó 66 mensajes válidos sin superar límites de Discord.
+- `src/utils/logEmbeds.js` y el antiguo `buildLogEmbed` fueron retirados por no tener consumidores. El único constructor del flujo automático es `src/utils/logMessages.js`.
+- `embeds.js` conserva únicamente respuestas genéricas de éxito/error, también tematizadas y truncadas de forma segura.
+- Se retiraron helpers de configuración y búsqueda de Kits que no utilizaba ningún comando.
+- `npm ci`, `npm ls`, imports de runtime, renderizadores y workers pasan correctamente; `npm audit` reportó 0 vulnerabilidades durante la instalación.
+
+## Pendiente externo
+
+- Desplegar/reiniciar Railway.
+- Probar en Discord real un Log extenso y la recuperación tras borrar un mensaje/hilo.
+
 # Sesión 10 — integración completa Discord OAuth, Logs granulares y foro de Guías
 
 - Se eliminó `/getcode` y la rotación de códigos.
@@ -373,6 +390,16 @@ Problemas conocidos:
 - Los renders de fabricación usan una interfaz compacta inspirada en las mesas de Minecraft, sin grandes espacios vacíos.
 - Los anuncios nuevos de Logs mencionan `@everyone` con la bandera `SuppressNotifications`; `/setlogchannel` garantiza el permiso `MentionEveryone` para el bot.
 - Los payloads de sincronización admiten mensajes normales sin embed además de mensajes con embeds y adjuntos.
+
+## Rediseño visual de publicaciones Discord — 2026-07-12
+
+- Se creó `src/utils/discordPresentation.js` como base compartida para colores, límites, división de texto y embeds de marca.
+- Los Logs usan una cabecera resumida, métricas agrupadas y fichas compactas con miniaturas para mobs, items y Extras.
+- Las Guías presentan cada rango con jerarquía propia y bloques diferenciados para estadísticas, habilidades, recursos, Extras y fabricación.
+- Las recetas de `renderWorkbench.js` combinan un marco oscuro ligado al tema global con una interfaz interior reconocible de Minecraft.
+- Se validaron visualmente mesa de crafteo, alto horno, mesa de herrería e intercambio.
+- Se probaron contenidos extensos de forma sintética: 10 mensajes de Log y 13 mensajes de Guía, sin superar límites de título, descripción, campos ni total por embed.
+- La lógica de sincronización, las claves persistentes, Supabase y las colas de publicación no cambiaron.
 
 ## Sesión — visibilidad de Logs y mención silenciosa (12 Jul 2026)
 
