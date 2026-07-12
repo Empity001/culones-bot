@@ -1,23 +1,35 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChannelType } from 'discord.js';
+import { PermissionFlagsBits } from 'discord.js';
 import { updateGuildConfig } from '../services/botConfig.js';
 import { buildSuccessEmbed, buildErrorEmbed } from '../utils/embeds.js';
-import { requireOwnerOrAdministrator } from '../utils/permissions.js';
 import { getGuildConfig } from '../services/botConfig.js';
 import { recordDiscordAudit } from '../services/audit.js';
 
-export const data = new SlashCommandBuilder()
-  .setName('setlogchannel')
-  .setDescription('Configura el canal donde se anuncian los Logs')
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  .addChannelOption(option => option
-    .setName('canal')
-    .setDescription('Canal de texto donde se publicarán los Logs')
-    .addChannelTypes(ChannelType.GuildText)
-    .setRequired(true));
+export async function executeLogChannel(interaction, sub) {
+  if (sub === 'view') {
+    const current = await getGuildConfig();
+    if (!current?.log_channel_id) {
+      await interaction.editReply({ embeds: [buildErrorEmbed('No hay un canal de Logs configurado. Usa `/config logs set`.')] });
+      return;
+    }
+    const channel = await interaction.guild.channels.fetch(current.log_channel_id).catch(() => null);
+    const status = channel ? `${channel}` : `El canal guardado (\`${current.log_channel_id}\`) ya no existe.`;
+    await interaction.editReply({ embeds: [buildSuccessEmbed('Canal de Logs', `${status}\n**ID:** \`${current.log_channel_id}\``)] });
+    return;
+  }
 
-export async function execute(interaction) {
-  if (!(await requireOwnerOrAdministrator(interaction, buildErrorEmbed))) return;
-  await interaction.deferReply({ ephemeral: true });
+  if (sub === 'clear') {
+    const current = await getGuildConfig();
+    await updateGuildConfig({ log_channel_id: null, updated_by: interaction.user.id });
+    await recordDiscordAudit(interaction, {
+      action: 'log_channel_cleared',
+      description: `${interaction.member?.displayName || interaction.user.username} quitó el canal oficial de Logs. Las publicaciones existentes permanecen intactas.`,
+      entityType: 'discord_log_channel', entityId: current?.log_channel_id || null,
+      oldValue: { channel_id: current?.log_channel_id || null }, newValue: { channel_id: null },
+    });
+    await interaction.editReply({ embeds: [buildSuccessEmbed('Canal de Logs desconfigurado', 'Las publicaciones existentes no se eliminaron.')] });
+    return;
+  }
+
   const channel = interaction.options.getChannel('canal', true);
   const me = interaction.guild.members.me || await interaction.guild.members.fetchMe();
   const perms = channel.permissionsFor(me);

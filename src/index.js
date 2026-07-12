@@ -35,8 +35,6 @@ for (const file of commandFiles) {
   if ('data' in command && 'execute' in command) {
     client.commands.set(command.data.name, command);
     console.log(`[Commands] Cargado: /${command.data.name}`);
-  } else {
-    console.warn(`[Commands] ⚠️  ${file} no exporta 'data' o 'execute'`);
   }
 }
 

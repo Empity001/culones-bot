@@ -1,31 +1,8 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { buildErrorEmbed, buildSuccessEmbed } from '../utils/embeds.js';
 import { getGuildConfig, updateGuildConfig } from '../services/botConfig.js';
-import { requireOwnerOrAdministrator } from '../utils/permissions.js';
 import { recordDiscordAudit } from '../services/audit.js';
 
-export const data = new SlashCommandBuilder()
-  .setName('adminrole')
-  .setDescription('Configura el rol que concede acceso administrativo a la página')
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  .addSubcommand(sub => sub
-    .setName('set')
-    .setDescription('Configura o reemplaza el rol administrativo de la web')
-    .addRoleOption(option => option.setName('rol').setDescription('Rol que podrá administrar la página').setRequired(true)))
-  .addSubcommand(sub => sub.setName('view').setDescription('Muestra el rol administrativo configurado'))
-  .addSubcommand(sub => sub
-    .setName('clear')
-    .setDescription('Elimina el rol administrativo configurado')
-    .addBooleanOption(option => option
-      .setName('confirmar')
-      .setDescription('Confirma que la web quedará temporalmente sin administradores')
-      .setRequired(true)));
-
-export async function execute(interaction) {
-  if (!(await requireOwnerOrAdministrator(interaction, buildErrorEmbed))) return;
-  await interaction.deferReply({ ephemeral: true });
-
-  const sub = interaction.options.getSubcommand();
+export async function executeAdminRole(interaction, sub) {
   try {
     if (sub === 'set') {
       const role = interaction.options.getRole('rol', true);
@@ -56,7 +33,7 @@ export async function execute(interaction) {
     if (sub === 'view') {
       const cfg = await getGuildConfig();
       if (!cfg?.admin_role_id) {
-        await interaction.editReply({ embeds: [buildErrorEmbed('Todavía no hay un rol administrativo configurado. Usa `/adminrole set`.')] });
+        await interaction.editReply({ embeds: [buildErrorEmbed('Todavía no hay un rol administrativo configurado. Usa `/config admin set`.')] });
         return;
       }
       const role = await interaction.guild.roles.fetch(cfg.admin_role_id).catch(() => null);
@@ -79,7 +56,7 @@ export async function execute(interaction) {
       entityType: 'discord_admin_role', entityId: previous || null,
       oldValue: { role_id: previous || null }, newValue: { role_id: null },
     });
-    await interaction.editReply({ embeds: [buildSuccessEmbed('Rol administrativo eliminado', `${interaction.user} eliminó la configuración${previous ? ` de <@&${previous}>` : ''}. Nadie podrá activar el modo administrador hasta ejecutar \`/adminrole set\`.`)], allowedMentions: { parse: [] } });
+    await interaction.editReply({ embeds: [buildSuccessEmbed('Rol administrativo eliminado', `${interaction.user} eliminó la configuración${previous ? ` de <@&${previous}>` : ''}. Nadie podrá activar el modo administrador hasta ejecutar \`/config admin set\`.`)], allowedMentions: { parse: [] } });
   } catch (error) {
     console.error('[adminrole]', error);
     await interaction.editReply({ embeds: [buildErrorEmbed(`No se pudo actualizar el rol: ${error.message}`)] });

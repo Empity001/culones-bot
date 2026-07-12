@@ -317,7 +317,7 @@ async function publishOrUpdateGuide(client, job) {
   let publication = await getPublication(job.guide_id);
   const cfg = await getGuildConfig();
   const targetForumId = publication?.forum_channel_id || cfg?.guides_forum_channel_id;
-  if (!targetForumId) throw new Error('No hay un foro de Guías configurado. Usa /guidesforum set.');
+  if (!targetForumId) throw new Error('No hay un foro de Guías configurado. Usa /config guias set.');
   const forum = await loadForum(client, targetForumId);
   const appliedTags = [
     await ensureTag(forum, 'category', bundle.category),

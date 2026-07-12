@@ -132,7 +132,7 @@ async function loadLogData(log) {
 async function getLogChannel(client) {
   const cfg = await getGuildConfig();
   if (!cfg?.log_channel_id) {
-    console.warn('[LogWatcher] No hay canal de Logs. Usa /setlogchannel.');
+    console.warn('[LogWatcher] No hay canal de Logs. Usa /config logs set.');
     return null;
   }
   return client.channels.fetch(cfg.log_channel_id).catch(error => {

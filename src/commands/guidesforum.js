@@ -1,7 +1,6 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChannelType } from 'discord.js';
+import { PermissionFlagsBits, ChannelType } from 'discord.js';
 import { buildErrorEmbed, buildSuccessEmbed } from '../utils/embeds.js';
 import { getGuildConfig, updateGuildConfig } from '../services/botConfig.js';
-import { requireOwnerOrAdministrator } from '../utils/permissions.js';
 import { recordDiscordAudit } from '../services/audit.js';
 
 const REQUIRED = [
@@ -23,22 +22,7 @@ function missingPermissions(channel, me) {
   return REQUIRED.filter(flag => !perms?.has(flag)).map(flag => flag.toString());
 }
 
-export const data = new SlashCommandBuilder()
-  .setName('guidesforum')
-  .setDescription('Configura el canal foro donde se publicarán las Guías')
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  .addSubcommand(sub => sub
-    .setName('set')
-    .setDescription('Configura el foro de Guías')
-    .addChannelOption(option => option.setName('canal').setDescription('Canal de tipo Foro').addChannelTypes(ChannelType.GuildForum).setRequired(true)))
-  .addSubcommand(sub => sub.setName('view').setDescription('Muestra el foro configurado y comprueba permisos'))
-  .addSubcommand(sub => sub.setName('clear').setDescription('Deja de usar el foro configurado'));
-
-export async function execute(interaction) {
-  if (!(await requireOwnerOrAdministrator(interaction, buildErrorEmbed))) return;
-  await interaction.deferReply({ ephemeral: true });
-  const sub = interaction.options.getSubcommand();
-
+export async function executeGuidesForum(interaction, sub) {
   try {
     if (sub === 'set') {
       const channel = interaction.options.getChannel('canal', true);
@@ -91,7 +75,7 @@ export async function execute(interaction) {
     if (sub === 'view') {
       const cfg = await getGuildConfig();
       if (!cfg?.guides_forum_channel_id) {
-        await interaction.editReply({ embeds: [buildErrorEmbed('No hay un foro configurado. Usa `/guidesforum set`.')] });
+        await interaction.editReply({ embeds: [buildErrorEmbed('No hay un foro configurado. Usa `/config guias set`.')] });
         return;
       }
       const channel = await interaction.guild.channels.fetch(cfg.guides_forum_channel_id).catch(() => null);
