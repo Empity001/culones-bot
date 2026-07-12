@@ -3,7 +3,7 @@ import { prepareDiscordImage } from './mediaAttachments.js';
 import { renderWorkbenchMethod, recipeMethodText } from './renderWorkbench.js';
 import { config } from '../config.js';
 
-const MAX_DESC = 3900;
+const MAX_DESC = 3800;
 function clean(v) { return String(v ?? '').trim(); }
 function truncate(v, max = 256) { const s = clean(v); return s.length <= max ? s : `${s.slice(0, max - 1)}…`; }
 function array(v) { return Array.isArray(v) ? v : []; }
@@ -43,7 +43,11 @@ function infoVisuals(sections) {
 function visibleSections(sections) { return array(sections).filter(item => item?._kind !== 'info_visuals'); }
 
 function simpleEmbed(color, title, description, url, footer) {
-  const embed = new EmbedBuilder().setColor(color).setTitle(truncate(title)).setDescription(description || '_Sin información._').setFooter({ text: footer });
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(truncate(title))
+    .setDescription(description || '_Sin información._')
+    .setFooter({ text: footer });
   if (url) embed.setURL(url);
   return embed;
 }
@@ -61,8 +65,27 @@ async function imageSpec({ key, color, title, description, imageUrl, imageName, 
   const prepared = imageUrl ? await prepareDiscordImage(imageUrl, imageName) : null;
   const embed = simpleEmbed(color, title, description, url, footer);
   const files = [];
-  if (prepared?.attachment) { embed.setImage(prepared.imageRef); files.push(prepared.attachment); }
-  return { key, embeds: [embed], files, attachmentHash: prepared?.hash || null, warning: prepared?.error?.message || null };
+  if (prepared?.attachment) {
+    embed.setImage(prepared.imageRef);
+    files.push(prepared.attachment);
+  }
+  return {
+    key,
+    embeds: [embed],
+    files,
+    attachmentHash: prepared?.hash || null,
+    warning: prepared?.error?.message || null,
+  };
+}
+
+function rankSeparatorSpec(rank) {
+  const name = clean(rank?.name || 'Rango').replace(/[\r\n]+/g, ' ').slice(0, 80);
+  return {
+    key: `rank:${rank.id}:separator`,
+    content: `────────── **${name}** ──────────`,
+    embeds: [],
+    files: [],
+  };
 }
 
 export async function buildGuideForumSpecs({ weapon, category, type, ranks }) {
@@ -89,21 +112,34 @@ export async function buildGuideForumSpecs({ weapon, category, type, ranks }) {
 
   for (const rank of ranks) {
     const rankUrl = guideUrl(weapon.id, rank.id);
+
+    // Separador normal (no embed) para que el comienzo de cada rango sea
+    // reconocible incluso en publicaciones muy extensas.
+    specs.push(rankSeparatorSpec(rank));
+
+    // La imagen del rango y su descripción pertenecen al mismo bloque.
+    const descriptionChunks = splitText(rank.description);
+    const firstDescription = descriptionChunks.shift() || '_Este rango no tiene descripción._';
     specs.push(await imageSpec({
-      key: `rank:${rank.id}:header`,
+      key: `rank:${rank.id}:overview`,
       color,
       title: `Rango · ${rank.name}`,
-      description: `[Abrir este rango en la página](${rankUrl})`,
+      description: `${firstDescription}\n\n[Ver rango en la página](${rankUrl})`,
       imageUrl: rank.image_url,
       imageName: `guide-${weapon.id}-rank-${rank.id}`,
       url: rankUrl,
       footer,
     }));
 
-    const descChunks = splitText(rank.description);
-    descChunks.forEach((chunk, index) => specs.push({
-      key: `rank:${rank.id}:description:${index + 1}`,
-      embeds: [simpleEmbed(color, index ? `Descripción — continuación ${index + 1}` : 'Descripción', `${chunk}\n\n[Ver rango en la página](${rankUrl})`, rankUrl, footer)],
+    descriptionChunks.forEach((chunk, index) => specs.push({
+      key: `rank:${rank.id}:description:${index + 2}`,
+      embeds: [simpleEmbed(
+        color,
+        `Descripción — continuación ${index + 2}`,
+        `${chunk}\n\n[Ver rango en la página](${rankUrl})`,
+        rankUrl,
+        footer,
+      )],
       files: [],
     }));
 
@@ -158,8 +194,7 @@ export async function buildGuideForumSpecs({ weapon, category, type, ranks }) {
         `${recipeMethodText(method, { guideLinkBuilder: guideLinkUrl })}\n\n[Ver rango en la página](${rankUrl})`,
         rankUrl,
         footer,
-      )
-        .setImage(`attachment://${filename}`);
+      ).setImage(`attachment://${filename}`);
       specs.push({
         key: `rank:${rank.id}:workbench:${index}`,
         embeds: [embed],

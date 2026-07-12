@@ -192,7 +192,14 @@ export async function buildLogMessageSpecs(log, category, mobs = [], items = [])
   entries.push({ key: 'footer', embeds: [footerEmbed], files: [] });
 
   return {
-    summary: { key: 'summary', embeds: [summary], files: summaryFiles, imageHash: cover?.hash || null },
+    summary: {
+      key: 'summary',
+      content: '@silent @everyone',
+      embeds: [summary],
+      files: summaryFiles,
+      imageHash: cover?.hash || null,
+      allowedMentions: { parse: ['everyone'] },
+    },
     entries,
   };
 }

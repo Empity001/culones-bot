@@ -280,12 +280,24 @@ function guideHash(bundle) {
   return createHash('sha256').update(JSON.stringify(stable(guideHashPayload(bundle)))).digest('hex');
 }
 
+function specPayload(spec, { editing = false } = {}) {
+  const payload = {
+    embeds: spec.embeds || [],
+    files: spec.files || [],
+    ...(editing ? { attachments: [] } : {}),
+    allowedMentions: { parse: [] },
+  };
+  if (spec.content != null) payload.content = spec.content;
+  else if (editing) payload.content = null;
+  return payload;
+}
+
 async function sendSpec(channel, spec) {
-  return channel.send({ embeds: spec.embeds, files: spec.files || [], allowedMentions: { parse: [] } });
+  return channel.send(specPayload(spec));
 }
 
 async function editSpec(message, spec) {
-  return message.edit({ embeds: spec.embeds, files: spec.files || [], attachments: [], allowedMentions: { parse: [] } });
+  return message.edit(specPayload(spec, { editing: true }));
 }
 
 async function publishOrUpdateGuide(client, job) {
@@ -325,7 +337,7 @@ async function publishOrUpdateGuide(client, job) {
     const thread = await createGuideThread(forum, {
       name: String(bundle.weapon.name).slice(0, 100),
       appliedTags,
-      message: { embeds: first.embeds, files: first.files || [], allowedMentions: { parse: [] } },
+      message: specPayload(first),
       reason: `Publicación de Guía solicitada desde la web por ${job.requested_discord_user_id || job.requested_by || 'admin'}`,
     });
     const starter = await thread.fetchStarterMessage();

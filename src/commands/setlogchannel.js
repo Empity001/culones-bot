@@ -30,12 +30,13 @@ export async function execute(interaction) {
     PermissionFlagsBits.SendMessagesInThreads,
     PermissionFlagsBits.ReadMessageHistory,
     PermissionFlagsBits.ManageThreads,
+    PermissionFlagsBits.MentionEveryone,
     PermissionFlagsBits.ManageChannels,
     PermissionFlagsBits.ManageRoles,
   ];
   const missing = required.filter(flag => !perms?.has(flag));
   if (missing.length) {
-    await interaction.editReply({ embeds: [buildErrorEmbed(`No tengo todos los permisos necesarios en ${channel}. Necesito ver el canal, enviar mensajes, insertar enlaces, adjuntar archivos, crear y gestionar hilos, escribir dentro de ellos y gestionar los permisos del canal (Gestionar roles).`)] });
+    await interaction.editReply({ embeds: [buildErrorEmbed(`No tengo todos los permisos necesarios en ${channel}. Necesito ver el canal, enviar mensajes, insertar enlaces, adjuntar archivos, crear y gestionar hilos, escribir dentro de ellos, mencionar @everyone de forma silenciosa y gestionar los permisos del canal (Gestionar roles).`)] });
     return;
   }
   try {
@@ -58,6 +59,7 @@ export async function execute(interaction) {
       [PermissionFlagsBits.AttachFiles]: true,
       [PermissionFlagsBits.ReadMessageHistory]: true,
       [PermissionFlagsBits.ManageThreads]: true,
+      [PermissionFlagsBits.MentionEveryone]: true,
     }, { reason: 'Permisos del bot para publicar y mantener los Logs' });
     await updateGuildConfig({ log_channel_id: channel.id, updated_by: interaction.user.id });
     await recordDiscordAudit(interaction, {

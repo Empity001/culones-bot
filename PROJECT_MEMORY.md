@@ -366,3 +366,10 @@ Problemas conocidos:
 - Ambos comandos aplican un overwrite explícito al miembro del bot para conservar envío, embeds, archivos, reacciones y gestión de hilos.
 - Los mensajes de error indican de forma clara que falta Gestionar roles/permisos.
 
+
+## Ajustes de publicación — 2026-07-12
+
+- Cada rango del foro comienza con un separador de texto normal y combina su imagen con la descripción en un solo embed.
+- Los renders de fabricación usan una interfaz compacta inspirada en las mesas de Minecraft, sin grandes espacios vacíos.
+- Los anuncios nuevos de Logs vuelven a usar `@silent @everyone`; `/setlogchannel` garantiza el permiso `MentionEveryone` para el bot.
+- Los payloads de sincronización admiten mensajes normales sin embed además de mensajes con embeds y adjuntos.

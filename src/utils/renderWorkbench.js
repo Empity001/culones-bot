@@ -1,57 +1,152 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { downloadImage } from './mediaAttachments.js';
-import { getRenderPalette, themeRgba } from '../services/siteTheme.js';
 
-const W = 900;
-const H = 430;
-const SLOT = 86;
+const SLOT = 68;
+const SLOT_GAP = 5;
+const PANEL_MARGIN = 12;
+const HEADER_HEIGHT = 58;
 
-function text(ctx, value, x, y, size = 24, align = 'left', weight = 'normal') {
+const COLORS = {
+  panel: '#c6c6c6',
+  panelLight: '#ffffff',
+  panelMid: '#9b9b9b',
+  panelDark: '#555555',
+  slot: '#8b8b8b',
+  slotDark: '#373737',
+  slotLight: '#f3f3f3',
+  text: '#2d2d2d',
+  textMuted: '#4c4c4c',
+  result: '#9a8ab2',
+  resultBorder: '#694c90',
+};
+
+function modeLabel(method = {}) {
+  if (method.mode === 'crafting') return 'Mesa de crafteo';
+  if (method.mode === 'furnace') {
+    if (method.furnace_type === 'blast_furnace') return 'Alto horno';
+    if (method.furnace_type === 'smoker') return 'Ahumador';
+    return 'Horno normal';
+  }
+  if (method.mode === 'smithing') return 'Mesa de herrería';
+  return 'Intercambio';
+}
+
+function canvasSize(method = {}) {
+  if (method.mode === 'crafting') return { width: 600, height: 350 };
+  if (method.mode === 'furnace') return { width: 520, height: 390 };
+  if (method.mode === 'smithing') return { width: 620, height: 265 };
+  const count = Math.max(1, Math.min(6, (method.materials || []).length));
+  return { width: 760, height: count > 3 ? 340 : 245 };
+}
+
+function drawText(ctx, value, x, y, size = 22, align = 'left', weight = 'normal', color = COLORS.text) {
   ctx.font = `${weight} ${size}px "Liberation Sans"`;
   ctx.textAlign = align;
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = getRenderPalette().text;
+  ctx.fillStyle = color;
   ctx.fillText(String(value || ''), x, y);
 }
 
-function rounded(ctx, x, y, w, h, r = 16) {
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, r);
+function drawPanel(ctx, width, height) {
+  const x = PANEL_MARGIN;
+  const y = PANEL_MARGIN;
+  const w = width - PANEL_MARGIN * 2;
+  const h = height - PANEL_MARGIN * 2;
+
+  ctx.fillStyle = COLORS.panel;
+  ctx.fillRect(x, y, w, h);
+
+  // Bisel grueso al estilo de las interfaces de Minecraft.
+  ctx.fillStyle = COLORS.panelLight;
+  ctx.fillRect(x, y, w, 5);
+  ctx.fillRect(x, y, 5, h);
+  ctx.fillStyle = COLORS.panelDark;
+  ctx.fillRect(x, y + h - 5, w, 5);
+  ctx.fillRect(x + w - 5, y, 5, h);
+
+  ctx.fillStyle = COLORS.panelMid;
+  ctx.fillRect(x + 5, y + h - 9, w - 10, 4);
+  ctx.fillRect(x + w - 9, y + 5, 4, h - 10);
 }
 
-async function slotImage(slot) {
-  if (!slot?.image_url) return null;
-  try {
-    const dl = await downloadImage(slot.image_url);
-    return dl ? await loadImage(dl.buffer) : null;
-  } catch {
-    return null;
-  }
+function drawHeader(ctx, title, method, width) {
+  drawText(ctx, title || 'Mesa de trabajo', 34, 37, 25, 'left', 'bold');
+  drawText(ctx, modeLabel(method), width - 34, 38, 17, 'right', 'bold', COLORS.textMuted);
+  ctx.fillStyle = '#8a8a8a';
+  ctx.fillRect(32, HEADER_HEIGHT, width - 64, 2);
+  ctx.fillStyle = '#e7e7e7';
+  ctx.fillRect(32, HEADER_HEIGHT + 2, width - 64, 2);
 }
 
-async function drawSlot(ctx, slot, x, y, { result = false } = {}) {
-  rounded(ctx, x, y, SLOT, SLOT, 12);
-  const theme = getRenderPalette();
-  ctx.fillStyle = result ? themeRgba(theme.primary, 0.34) : theme.elevated;
-  ctx.fill();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = result ? theme.primarySoft : themeRgba(theme.primary, 0.62);
-  ctx.stroke();
-  const img = await slotImage(slot);
+async function loadSlotImage(slot, cache) {
+  const url = slot?.image_url;
+  if (!url) return null;
+  if (cache.has(url)) return cache.get(url);
+  const promise = (async () => {
+    try {
+      const dl = await downloadImage(url);
+      return dl ? await loadImage(dl.buffer) : null;
+    } catch {
+      return null;
+    }
+  })();
+  cache.set(url, promise);
+  return promise;
+}
+
+function drawSlotFrame(ctx, x, y, { result = false } = {}) {
+  const size = SLOT;
+  const fill = result ? COLORS.result : COLORS.slot;
+  const dark = result ? COLORS.resultBorder : COLORS.slotDark;
+
+  ctx.fillStyle = dark;
+  ctx.fillRect(x, y, size, size);
+  ctx.fillStyle = COLORS.slotLight;
+  ctx.fillRect(x + 4, y + 4, size - 4, size - 4);
+  ctx.fillStyle = fill;
+  ctx.fillRect(x + 4, y + 4, size - 8, size - 8);
+  ctx.fillStyle = '#666666';
+  ctx.fillRect(x + size - 7, y + 4, 3, size - 8);
+  ctx.fillRect(x + 4, y + size - 7, size - 8, 3);
+}
+
+async function drawSlot(ctx, slot, x, y, cache, { result = false } = {}) {
+  drawSlotFrame(ctx, x, y, { result });
+  const img = await loadSlotImage(slot, cache);
   if (img) {
     ctx.imageSmoothingEnabled = false;
-    const max = 58;
-    const scale = Math.max(1, Math.floor(Math.min(max / img.width, max / img.height)));
-    const w = Math.min(max, img.width * scale);
-    const h = Math.min(max, img.height * scale);
-    ctx.drawImage(img, x + (SLOT - w) / 2, y + (SLOT - h) / 2, w, h);
+    const max = 50;
+    let w;
+    let h;
+    if (img.width <= max && img.height <= max) {
+      const scale = Math.max(1, Math.floor(Math.min(max / img.width, max / img.height)));
+      w = Math.max(1, Math.min(max, img.width * scale));
+      h = Math.max(1, Math.min(max, img.height * scale));
+    } else {
+      const scale = Math.min(max / img.width, max / img.height);
+      w = Math.max(1, Math.round(img.width * scale));
+      h = Math.max(1, Math.round(img.height * scale));
+    }
+    ctx.drawImage(img, Math.round(x + (SLOT - w) / 2), Math.round(y + (SLOT - h) / 2), w, h);
   } else if (slot?.name) {
-    text(ctx, String(slot.name).slice(0, 2).toUpperCase(), x + SLOT / 2, y + SLOT / 2, 22, 'center', 'bold');
+    drawText(ctx, String(slot.name).slice(0, 2).toUpperCase(), x + SLOT / 2, y + SLOT / 2, 20, 'center', 'bold', '#f5f5f5');
   }
+
   const qty = Math.max(1, Number(slot?.qty) || 1);
   if ((slot?.name || slot?.image_url) && qty > 1) {
-    text(ctx, `×${qty}`, x + SLOT - 8, y + SLOT - 14, 18, 'right', 'bold');
+    const label = String(qty);
+    drawText(ctx, label, x + SLOT - 7, y + SLOT - 10, 18, 'right', 'bold', '#1b1b1b');
+    drawText(ctx, label, x + SLOT - 9, y + SLOT - 12, 18, 'right', 'bold', '#ffffff');
   }
+}
+
+function shortName(value, max = 22) {
+  const text = String(value || '').trim();
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+function drawArrow(ctx, x, y) {
+  drawText(ctx, '→', x, y, 54, 'center', 'bold', '#494949');
 }
 
 function methodsSlots(method) {
@@ -88,57 +183,80 @@ export function recipeMethodText(method = {}, { guideLinkBuilder = null } = {}) 
   return lines.join('\n');
 }
 
-export async function renderWorkbenchMethod(method = {}, title = 'Mesa de trabajo') {
-  const canvas = createCanvas(W, H);
-  const ctx = canvas.getContext('2d');
-  const theme = getRenderPalette();
-  ctx.fillStyle = theme.bg;
-  ctx.fillRect(0, 0, W, H);
-  const gradient = ctx.createLinearGradient(0, 0, W, H);
-  gradient.addColorStop(0, themeRgba(theme.primary, 0.30));
-  gradient.addColorStop(1, themeRgba(theme.panel, 0.08));
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, W, H);
-  text(ctx, title, 42, 42, 28, 'left', 'bold');
-  text(ctx, recipeMethodText(method).split('\n')[0].replace(/\*\*/g, ''), 42, 78, 18);
-
-  const result = method.result || {};
-  if (method.mode === 'crafting') {
-    const grid = Array.from({ length: 9 }, (_, i) => method.grid?.[i] || {});
-    const startX = 70, startY = 110;
-    for (let i = 0; i < 9; i++) {
-      await drawSlot(ctx, grid[i], startX + (i % 3) * (SLOT + 12), startY + Math.floor(i / 3) * (SLOT + 12));
-    }
-    text(ctx, '→', 470, 235, 66, 'center', 'bold');
-    await drawSlot(ctx, result, 570, 190, { result: true });
-    text(ctx, result.name || 'Resultado', 613, 310, 20, 'center');
-  } else if (method.mode === 'furnace') {
-    const inputs = method.inputs || [];
-    await drawSlot(ctx, inputs[0] || {}, 170, 105);
-    text(ctx, '🔥', 213, 218, 44, 'center');
-    await drawSlot(ctx, inputs[1] || {}, 170, 260);
-    text(ctx, '→', 450, 215, 66, 'center', 'bold');
-    await drawSlot(ctx, result, 590, 170, { result: true });
-    text(ctx, result.name || 'Resultado', 633, 292, 20, 'center');
-  } else if (method.mode === 'smithing') {
-    const inputs = method.inputs || [];
-    for (let i = 0; i < 3; i++) await drawSlot(ctx, inputs[i] || {}, 70 + i * (SLOT + 35), 170);
-    text(ctx, '+', 178, 213, 32, 'center', 'bold');
-    text(ctx, '+', 299, 213, 32, 'center', 'bold');
-    text(ctx, '→', 500, 213, 66, 'center', 'bold');
-    await drawSlot(ctx, result, 620, 170, { result: true });
-    text(ctx, result.name || 'Resultado', 663, 292, 20, 'center');
-  } else {
-    const materials = (method.materials || []).slice(0, 6);
-    const startX = 55;
-    const gap = 18;
-    for (let i = 0; i < materials.length; i++) {
-      await drawSlot(ctx, materials[i], startX + i * (SLOT + gap), 160);
-      if (i < materials.length - 1) text(ctx, '+', startX + i * (SLOT + gap) + SLOT + gap / 2, 203, 24, 'center', 'bold');
-    }
-    text(ctx, '→', 690, 203, 54, 'center', 'bold');
-    await drawSlot(ctx, result, 755, 160, { result: true });
-    text(ctx, result.name || 'Resultado', 798, 282, 18, 'center');
+async function drawCrafting(ctx, method, cache) {
+  const grid = Array.from({ length: 9 }, (_, i) => method.grid?.[i] || {});
+  const startX = 50;
+  const startY = 80;
+  for (let i = 0; i < 9; i++) {
+    await drawSlot(ctx, grid[i], startX + (i % 3) * (SLOT + SLOT_GAP), startY + Math.floor(i / 3) * (SLOT + SLOT_GAP), cache);
   }
+  drawArrow(ctx, 355, 187);
+  await drawSlot(ctx, method.result || {}, 442, 153, cache, { result: true });
+  drawText(ctx, shortName(method.result?.name || 'Resultado'), 476, 245, 17, 'center', 'bold');
+}
+
+async function drawFurnace(ctx, method, cache) {
+  const inputs = method.inputs || [];
+  const slotX = 105;
+  await drawSlot(ctx, inputs[0] || {}, slotX, 82, cache);
+  drawText(ctx, '♨', slotX + SLOT / 2, 194, 34, 'center', 'bold', '#c85b23');
+  await drawSlot(ctx, inputs[1] || {}, slotX, 240, cache);
+  drawArrow(ctx, 300, 185);
+  await drawSlot(ctx, method.result || {}, 380, 151, cache, { result: true });
+  drawText(ctx, shortName(method.result?.name || 'Resultado'), 414, 246, 17, 'center', 'bold');
+}
+
+async function drawSmithing(ctx, method, cache) {
+  const inputs = method.inputs || [];
+  const startX = 42;
+  const y = 105;
+  for (let i = 0; i < 3; i++) {
+    await drawSlot(ctx, inputs[i] || {}, startX + i * (SLOT + 26), y, cache);
+    if (i < 2) drawText(ctx, '+', startX + SLOT + 13 + i * (SLOT + 26), y + SLOT / 2, 26, 'center', 'bold', '#4a4a4a');
+  }
+  drawArrow(ctx, 390, y + SLOT / 2);
+  await drawSlot(ctx, method.result || {}, 484, y, cache, { result: true });
+  drawText(ctx, shortName(method.result?.name || 'Resultado'), 518, 206, 17, 'center', 'bold');
+}
+
+async function drawTrade(ctx, method, cache) {
+  const materials = (method.materials || []).slice(0, 6);
+  const columns = Math.min(3, Math.max(1, materials.length));
+  const startX = 42;
+  const startY = 82;
+  const rowGap = 38;
+
+  for (let i = 0; i < materials.length; i++) {
+    const col = i % columns;
+    const row = Math.floor(i / columns);
+    const x = startX + col * (SLOT + 38);
+    const y = startY + row * (SLOT + rowGap);
+    await drawSlot(ctx, materials[i], x, y, cache);
+    drawText(ctx, shortName(materials[i]?.name || `Material ${i + 1}`, 15), x + SLOT / 2, y + SLOT + 18, 14, 'center', 'bold');
+    if (col < columns - 1 && i < materials.length - 1) {
+      drawText(ctx, '+', x + SLOT + 19, y + SLOT / 2, 24, 'center', 'bold', '#4a4a4a');
+    }
+  }
+
+  drawArrow(ctx, 555, materials.length > 3 ? 170 : 118);
+  const resultY = materials.length > 3 ? 136 : 84;
+  await drawSlot(ctx, method.result || {}, 635, resultY, cache, { result: true });
+  drawText(ctx, shortName(method.result?.name || 'Resultado'), 669, resultY + SLOT + 22, 16, 'center', 'bold');
+}
+
+export async function renderWorkbenchMethod(method = {}, title = 'Mesa de trabajo') {
+  const { width, height } = canvasSize(method);
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, width, height);
+  drawPanel(ctx, width, height);
+  drawHeader(ctx, title, method, width);
+
+  const cache = new Map();
+  if (method.mode === 'crafting') await drawCrafting(ctx, method, cache);
+  else if (method.mode === 'furnace') await drawFurnace(ctx, method, cache);
+  else if (method.mode === 'smithing') await drawSmithing(ctx, method, cache);
+  else await drawTrade(ctx, method, cache);
+
   return canvas.toBuffer('image/png');
 }

@@ -142,19 +142,22 @@ async function syncLogPublication(client, log) {
 }
 
 async function sendSpec(target, spec) {
-  return target.send({
-    embeds: spec.embeds,
+  const payload = {
+    embeds: spec.embeds || [],
     files: spec.files || [],
-    allowedMentions: { parse: [] },
-  });
+    allowedMentions: spec.allowedMentions || { parse: [] },
+  };
+  if (spec.content != null) payload.content = spec.content;
+  return target.send(payload);
 }
 
 async function editSpec(message, spec) {
   return message.edit({
-    embeds: spec.embeds,
+    content: spec.content ?? null,
+    embeds: spec.embeds || [],
     files: spec.files || [],
     attachments: [],
-    allowedMentions: { parse: [] },
+    allowedMentions: spec.allowedMentions || { parse: [] },
   });
 }
 
@@ -308,6 +311,7 @@ async function ensureLogChannelThreadPerms(channel) {
         [PermissionFlagsBits.AttachFiles]: true,
         [PermissionFlagsBits.ReadMessageHistory]: true,
         [PermissionFlagsBits.ManageThreads]: true,
+        [PermissionFlagsBits.MentionEveryone]: true,
       });
     }
     configuredChannels.add(channel.id);
