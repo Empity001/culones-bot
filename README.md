@@ -6,15 +6,26 @@ Bot exclusivo del servidor oficial de Culones RPG. Conecta Discord con la web y 
 
 | Comando | Uso | Permiso |
 |---|---|---|
-| `/ping` | Comprueba Discord y Supabase | Cualquiera |
+| `/buscar consulta:<texto>` | Busca contenido publicado y devuelve enlaces exactos a la web | Cualquiera |
 | `/screenshot tierlist` | Genera la Tierlist completa o una columna | Cualquiera |
 | `/screenshot guias` | Genera el catálogo de Guías | Cualquiera |
 | `/screenshot guia` | Genera una imagen por rango | Cualquiera |
 | `/screenshot kits` | Genera los Kits recomendados | Cualquiera |
 | `/screenshot logs` | Genera la lista o el detalle de un Log | Cualquiera |
-| `/config logs/guias/admin set/view/clear` | Configura Logs, foro de Guías y rol administrativo desde un solo comando | Propietario o `Administrator` |
+| `/config` | Abre el panel privado de configuración, estado y recuperación | Propietario o `Administrator` |
 
-`/getcode` ya no existe. El acceso administrativo se realiza desde la web mediante Discord OAuth y el rol elegido con `/config admin set`.
+`/getcode`, `/ping` y `/estado` ya no existen como comandos separados. El acceso administrativo se realiza desde la web mediante Discord OAuth y el rol elegido en **`/config` → Acceso**. El diagnóstico está en **`/config` → Estado**.
+
+## Panel único de configuración
+
+`/config` responde de forma privada con una interfaz de botones y selectores. No hay familias de subcomandos con `set/view/clear`:
+
+- **Canales** configura Logs, foro de Guías y alertas.
+- **Acceso** configura el rol administrativo de la web.
+- **Estado** ejecuta un diagnóstico puntual de Discord, Supabase, permisos y colas.
+- **Recuperación** comprueba publicaciones y permite reintentar, con confirmación, trabajos de Guías agotados.
+
+Las acciones vuelven a comprobar que el usuario sea propietario o tenga `Administrator`, incluso al pulsar botones antiguos. Las comprobaciones de integridad se deduplican: si el barrido de arranque, el horario o uno manual ya está en curso, cualquier otra solicitud se une a la misma operación.
 
 ## Logs automáticos
 
@@ -59,6 +70,20 @@ Las publicaciones usan dos etiquetas:
 El bot crea y reutiliza las etiquetas por ID. Si el foro alcanza su límite, la publicación falla con un mensaje explicativo en la web.
 
 La cola `guide_forum_jobs` es duradera e idempotente. Si Railway se reinicia, los trabajos pendientes continúan y los que quedaron interrumpidos se recuperan.
+
+## Salud, reintentos y alertas
+
+- Al iniciar, el bot ejecuta un único diagnóstico de Discord, Supabase, rol, canales, permisos y cola. No crea un sondeo de salud permanente.
+- **`/config` → Estado** repite el diagnóstico solo cuando un administrador lo solicita.
+- Una sincronización de Log se reintenta tres veces con espera incremental; si se agota, el bot alerta y el barrido de integridad conserva una vía posterior de recuperación.
+- Los trabajos del foro respetan `GUIDE_JOB_MAX_ATTEMPTS`. Cuando un trabajo llega al límite o la cola falla tres revisiones seguidas, se genera una alerta deduplicada.
+- El canal privado de alertas se elige en **`/config` → Canales → Alertas**. `BOT_ALERT_CHANNEL_ID` queda como respaldo de compatibilidad hasta aplicar la migración nueva. Sin canal, el bot intenta avisar por DM al dueño del servidor.
+- La configuración del servidor usa una caché compartida de 30 segundos para evitar lecturas repetidas desde el panel y los workers; cualquier cambio actualiza esa caché inmediatamente.
+- Railway cierra Realtime y Discord limpiamente al enviar `SIGTERM` o `SIGINT`.
+
+## Búsqueda pública
+
+`/buscar` consulta únicamente cuando alguien ejecuta el comando. Busca coincidencias publicadas en Guías y rangos, Logs y sus fichas, Tierlist y Kits. Cada fuente tiene límites independientes y el resultado combinado muestra como máximo diez enlaces. No utiliza autocomplete para evitar consultas por cada tecla escrita.
 
 
 ## Recuperación ante borrados manuales
@@ -114,12 +139,8 @@ Discord permite una reacción nativa predeterminada por foro, pero Culones RPG a
 src/
 ├── commands/
 │   ├── config.js
-│   ├── ping.js
+│   ├── buscar.js
 │   └── screenshot.js
-├── command-handlers/
-│   ├── adminrole.js
-│   ├── guidesforum.js
-│   └── setlogchannel.js
 ├── events/
 │   ├── interactionCreate.js
 │   ├── messageDelete.js
@@ -128,6 +149,9 @@ src/
 ├── services/
 │   ├── audit.js
 │   ├── botConfig.js
+│   ├── botHealth.js
+│   ├── discordConfiguration.js
+│   ├── adminAlerts.js
 │   ├── deletionSuppressor.js
 │   ├── guideForumWorker.js
 │   ├── logPublication.js
@@ -136,6 +160,7 @@ src/
 │   ├── siteTheme.js
 │   └── ...lectores de Supabase
 └── utils/
+    ├── configPanel.js
     ├── guideForumEmbeds.js
     ├── logMessages.js
     ├── mediaAttachments.js
@@ -147,6 +172,8 @@ La migración compartida está en:
 
 ```text
 sql/migration_021_discord_auth_and_forum.sql
+sql/migration_022_log_visibility.sql
+sql/migration_023_bot_config_panel.sql
 ```
 
 ## Variables de entorno
@@ -160,11 +187,15 @@ SUPABASE_SERVICE_ROLE_KEY=
 SITE_URL=https://empity001.github.io/culones-rpg/
 GUIDE_JOB_POLL_MS=15000
 GUIDE_JOB_MAX_ATTEMPTS=5
+BOT_ALERT_CHANNEL_ID=
+BOT_ALERT_COOLDOWN_MS=21600000
 ```
 
 No uses `AUTHORIZED_USER_IDS`. No incluyas el token, el Client Secret ni la service role en GitHub.
 
 ## Instalación
+
+Requiere Node.js 22 o posterior. Railway lo selecciona desde `package.json`.
 
 ```bash
 npm install
@@ -172,15 +203,11 @@ npm run deploy
 npm start
 ```
 
-`npm run deploy` registra todos los comandos en el servidor indicado por `DISCORD_GUILD_ID` y reemplaza el conjunto anterior. La configuración vive compactada bajo `/config`: `logs`, `guias` y `admin` son grupos internos, no comandos sueltos. Los grupos que configuran canales (`/config logs set` y `/config guias set`) también requieren que el bot tenga **Gestionar roles**, porque Discord usa ese permiso para editar los overwrites del canal, además de **Gestionar canales** y los permisos de envío/hilos indicados.
+`npm run deploy` registra todos los comandos en el servidor indicado por `DISCORD_GUILD_ID` y reemplaza el conjunto anterior. Tras actualizar a `bot-config-panel-02`, este paso retira `/ping`, `/estado` y los subcomandos anteriores de `/config`; quedan únicamente `/config`, `/buscar` y `/screenshot`.
 
-Después del primer despliegue ejecuta:
+Antes de desplegar, ejecuta `sql/migration_023_bot_config_panel.sql` en Supabase. Añade el canal de alertas a la configuración persistente. Configurar Logs y Guías desde el panel requiere que el bot tenga **Gestionar roles**, porque Discord usa ese permiso para editar los overwrites, además de los permisos de canal indicados en el diagnóstico.
 
-```text
-/config admin set rol:@AdministradoresWeb
-/config logs set canal:#logs
-/config guias set canal:#guias
-```
+Después del primer despliegue abre `/config` y completa **Canales** y **Acceso** con sus selectores.
 
 Consulta `GUIA_DESPLIEGUE_DISCORD_AUTH.md` en el proyecto web para el orden completo de Supabase Auth, Edge Functions, SQL, Railway y GitHub Pages.
 

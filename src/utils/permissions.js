@@ -17,19 +17,24 @@ async function getConfiguredAdminRoleId() {
   return cfg?.admin_role_id || null;
 }
 
-async function memberHasConfiguredAdminRole(guild, userId) {
+async function memberHasConfiguredAdminRole(interaction) {
+  const guild = interaction.guild;
+  const userId = interaction.user?.id;
   if (!guild || !isOfficialGuild(guild.id) || !userId) return false;
   const roleId = await getConfiguredAdminRoleId();
   if (!roleId) return false;
-  const role = await guild.roles.fetch(roleId).catch(() => null);
-  if (!role) return false;
+
+  // Las interacciones de servidor ya incluyen al miembro. Usarlo evita dos
+  // viajes innecesarios a la API de Discord en cada acción administrativa.
+  if (interaction.member?.roles?.cache?.has) return interaction.member.roles.cache.has(roleId);
+  if (Array.isArray(interaction.member?.roles)) return interaction.member.roles.includes(roleId);
   const member = await guild.members.fetch(userId).catch(() => null);
   return Boolean(member?.roles?.cache?.has(roleId));
 }
 
 export async function canUseAdminFeature(interaction) {
   if (isOwnerOrAdministrator(interaction)) return true;
-  return memberHasConfiguredAdminRole(interaction.guild, interaction.user.id);
+  return memberHasConfiguredAdminRole(interaction);
 }
 
 export async function requireOwnerOrAdministrator(interaction, errorEmbedFactory) {

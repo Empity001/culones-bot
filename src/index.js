@@ -10,6 +10,7 @@ import { dirname, join } from 'path';
 
 // Cargar config primero (valida variables de entorno)
 import { config } from './config.js';
+import { supabase } from './services/supabase.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +62,27 @@ process.on('unhandledRejection', (err) => {
 process.on('uncaughtException', (err) => {
   console.error('[Process] uncaughtException:', err);
 });
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[Process] ${signal}: cerrando conexiones…`);
+  const forceExit = setTimeout(() => process.exit(1), 8_000);
+  forceExit.unref?.();
+  try {
+    await supabase.removeAllChannels();
+    client.destroy();
+    clearTimeout(forceExit);
+    process.exit(0);
+  } catch (error) {
+    console.error('[Process] Error durante el cierre:', error);
+    process.exit(1);
+  }
+}
+
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));
 
 // ── Conectar ──────────────────────────────────────────────────────────────────
 client.login(config.discord.token);

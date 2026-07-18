@@ -22,6 +22,26 @@ export async function execute(interaction) {
     return;
   }
 
+  // El panel de /config vive en un único mensaje efímero y navega mediante
+  // botones/selectores. Se enruta antes de los comandos de chat.
+  if (interaction.isMessageComponent()) {
+    if (!interaction.customId?.startsWith('config:')) return;
+    const command = interaction.client.commands.get('config');
+    if (!command || typeof command.handleComponent !== 'function') return;
+    try {
+      await command.handleComponent(interaction);
+    } catch (err) {
+      console.error('[Interaction] Error en el panel de /config:', err);
+      const errEmbed = buildErrorEmbed('Ocurrió un error al usar el panel. Abre `/config` de nuevo e inténtalo otra vez.');
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ embeds: [errEmbed], ephemeral: true }).catch(() => {});
+      } else {
+        await interaction.reply({ embeds: [errEmbed], ephemeral: true }).catch(() => {});
+      }
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const command = interaction.client.commands.get(interaction.commandName);

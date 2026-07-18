@@ -8,11 +8,13 @@ import { config } from '../config.js';
 import { refreshRenderPalette } from './siteTheme.js';
 import { recordGuideForumWorkerAudit } from './audit.js';
 import { suppressDiscordDeletion } from './deletionSuppressor.js';
+import { sendAdminAlert } from './adminAlerts.js';
 
 const processingJobs = new Set();
 const processingGuides = new Set();
 let realtimeChannel = null;
 let pollTimer = null;
+let consecutiveSweepFailures = 0;
 
 export function startGuideForumWorker(client) {
   if (realtimeChannel) return;
@@ -48,9 +50,19 @@ async function sweepJobs(client) {
     .order('created_at', { ascending: true })
     .limit(20);
   if (error) {
+    consecutiveSweepFailures += 1;
     console.warn('[GuideForum] No se pudo revisar la cola:', error.message);
+    if (consecutiveSweepFailures >= 3) {
+      void sendAdminAlert(client, {
+        key: 'guide-queue-unavailable',
+        title: 'La cola de Guías no responde',
+        description: `El bot no pudo consultar guide_forum_jobs en ${consecutiveSweepFailures} revisiones consecutivas.`,
+        details: [{ name: 'Último error', value: String(error.message || error).slice(0, 1000) }],
+      });
+    }
     return;
   }
+  consecutiveSweepFailures = 0;
   for (const job of data || []) void processJob(client, job);
 }
 
@@ -118,6 +130,18 @@ async function processJob(client, rawJob) {
         metadata: { error_code: error.code || 'GUIDE_FORUM_ERROR' },
         success: false,
       });
+      if (Number(job.attempts || 0) >= config.worker.maxJobAttempts) {
+        void sendAdminAlert(client, {
+          key: `guide-job-exhausted:${job.id}`,
+          title: 'Una publicación de Guías agotó sus reintentos',
+          description: `El trabajo “${job.action}” ya alcanzó ${config.worker.maxJobAttempts} intento(s) y necesita revisión manual.`,
+          details: [
+            { name: 'Trabajo', value: String(job.id), inline: true },
+            { name: 'Guía', value: String(job.payload?.guide_name || job.guide_id || 'general'), inline: true },
+            { name: 'Último error', value: String(error?.message || error).slice(0, 1000) },
+          ],
+        });
+      }
     }
   } finally {
     processingJobs.delete(rawJob.id);
@@ -317,7 +341,7 @@ async function publishOrUpdateGuide(client, job) {
   let publication = await getPublication(job.guide_id);
   const cfg = await getGuildConfig();
   const targetForumId = publication?.forum_channel_id || cfg?.guides_forum_channel_id;
-  if (!targetForumId) throw new Error('No hay un foro de Guías configurado. Usa /config guias set.');
+  if (!targetForumId) throw new Error('No hay un foro de Guías configurado. Abre /config → Canales → Guías.');
   const forum = await loadForum(client, targetForumId);
   const appliedTags = [
     await ensureTag(forum, 'category', bundle.category),

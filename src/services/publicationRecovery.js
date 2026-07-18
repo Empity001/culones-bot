@@ -5,6 +5,8 @@
 import { supabase } from './supabase.js';
 import { requestLogSyncById } from './logWatcher.js';
 
+let integritySweepInFlight = null;
+
 function mapContainsId(map, messageId) {
   if (!map || typeof map !== 'object' || Array.isArray(map)) return false;
   return Object.values(map).some(value => String(value) === String(messageId));
@@ -97,7 +99,7 @@ async function firstMissingMessage(thread, messageMap) {
   return null;
 }
 
-export async function sweepPublicationIntegrity(client) {
+async function runPublicationIntegritySweep(client) {
   console.log('[Recovery] Comprobando integridad de publicaciones persistentes…');
   const [
     { data: guidePubs, error: guideError },
@@ -167,4 +169,18 @@ export async function sweepPublicationIntegrity(client) {
     if (damaged) await requestLogSyncById(client, publication.log_id, 250).catch(error => console.warn(`[Recovery] No se pudo reconstruir Log ${publication.log_id}:`, error.message));
   }
   console.log('[Recovery] Comprobación de integridad terminada.');
+}
+
+// Ready, el temporizador horario y el panel manual comparten este candado. Si
+// coinciden, todos esperan el mismo barrido en vez de multiplicar consultas a
+// Supabase y Discord.
+export function isPublicationIntegritySweepRunning() {
+  return Boolean(integritySweepInFlight);
+}
+
+export function sweepPublicationIntegrity(client) {
+  if (integritySweepInFlight) return integritySweepInFlight;
+  integritySweepInFlight = runPublicationIntegritySweep(client)
+    .finally(() => { integritySweepInFlight = null; });
+  return integritySweepInFlight;
 }

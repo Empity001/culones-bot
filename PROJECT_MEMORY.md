@@ -1,4 +1,27 @@
-# Sesión actual — Auditoría conjunta y recuperación robusta (12 Jul 2026)
+# Sesión actual — `bot-config-panel-02` (17 Jul 2026)
+
+- Todos los ajustes administrativos se concentran en un solo comando raíz: `/config`.
+- El comando abre un panel efímero con **Canales**, **Acceso**, **Estado** y **Recuperación**; no usa subcomandos `set/view/clear`.
+- **Canales** configura Logs, foro de Guías y canal privado de alertas con selectores nativos.
+- **Acceso** configura el rol administrativo de la web y exige confirmación para retirarlo.
+- **Estado** integra el antiguo diagnóstico de `/estado`; **Recuperación** integra el barrido manual y el reinicio confirmado de trabajos agotados.
+- Se retiraron `/ping`, `/estado` y los antiguos handlers de configuración. Permanecen `/buscar` y `/screenshot` como comandos públicos independientes.
+- Los barridos de arranque, horario y manual no pueden superponerse: las solicitudes concurrentes comparten la misma operación.
+- Migración nueva: `sql/migration_023_bot_config_panel.sql`, que añade `alert_channel_id` a `discord_guild_config`.
+- Despliegue: aplicar la migración, ejecutar `npm run deploy` y reiniciar Railway.
+
+# Sesión anterior — `bot-reliability-01` (17 Jul 2026)
+
+- Se añadieron `/estado` (privado y administrativo) y `/buscar` (público, respuesta privada con enlaces exactos).
+- El diagnóstico de salud comprueba Discord, Supabase, rol administrativo, canales, permisos, cola y publicaciones con incidencias. Se ejecuta una vez al arrancar y bajo demanda; no existe un polling nuevo.
+- Las sincronizaciones de Logs y los trabajos de Guías agotados generan alertas administrativas deduplicadas. La cola también alerta después de tres fallos consecutivos.
+- `BOT_ALERT_CHANNEL_ID` es opcional; sin él, el bot intenta avisar por DM al dueño. `BOT_ALERT_COOLDOWN_MS` evita tormentas de mensajes.
+- `discord_guild_config` ahora tiene caché de 30 segundos y deduplicación de lecturas simultáneas. Las escrituras renuevan la caché de inmediato.
+- Se añadió cierre limpio de canales Supabase Realtime y Discord ante `SIGTERM`/`SIGINT` de Railway.
+- El runtime mínimo subió a Node.js 22 porque Node 20 ya está fuera de soporte y Supabase avisa de su retirada.
+- No hay migración SQL. Se debe ejecutar `npm run deploy` una vez para registrar los dos comandos nuevos.
+
+# Sesión anterior — Auditoría conjunta y recuperación robusta (12 Jul 2026)
 
 - Se validaron todos los módulos con Node 20+, dependencias reales, Canvas, Discord.js, Supabase y Axios.
 - `logWatcher.js` reintenta una sincronización fallida hasta tres veces con espera incremental.

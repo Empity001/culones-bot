@@ -5,6 +5,7 @@ import { Events } from 'discord.js';
 import { startLogWatcher } from '../services/logWatcher.js';
 import { startGuideForumWorker } from '../services/guideForumWorker.js';
 import { sweepPublicationIntegrity } from '../services/publicationRecovery.js';
+import { runStartupDiagnostics } from '../services/botHealth.js';
 
 export const name = Events.ClientReady;
 export const once = true;
@@ -13,6 +14,9 @@ export async function execute(client) {
   console.log(`[Ready] ✅ Bot conectado como ${client.user.tag}`);
   startLogWatcher(client);
   startGuideForumWorker(client);
+  void runStartupDiagnostics(client).catch(error => {
+    console.warn('[Health] El diagnóstico de arranque falló:', error?.message || error);
+  });
 
   // Recupera daños ocurridos mientras el bot estaba apagado. Después se
   // repite de forma espaciada como red de seguridad adicional a los eventos

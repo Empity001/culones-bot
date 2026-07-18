@@ -6,6 +6,7 @@ import { getPublication, upsertPublication, deletePublication } from './logPubli
 import { buildLogMessageSpecs } from '../utils/logMessages.js';
 import { suppressDiscordDeletion } from './deletionSuppressor.js';
 import { refreshRenderPalette } from './siteTheme.js';
+import { sendAdminAlert } from './adminAlerts.js';
 
 const syncStates = new Map();
 const deletionLocks = new Set();
@@ -81,6 +82,15 @@ async function runSyncLoop(client, logId) {
           console.warn(`[LogWatcher] Reintento ${state.failures}/3 para ${logId}:`, error.message || error);
         } else {
           console.error(`[LogWatcher] Error completo sincronizando ${logId} después de 3 reintentos:`, error);
+          void sendAdminAlert(client, {
+            key: `log-sync-exhausted:${logId}`,
+            title: 'Un Log agotó sus reintentos',
+            description: `No se pudo sincronizar “${log?.title || logId}” con Discord después de tres reintentos. El barrido de integridad volverá a revisarlo.`,
+            details: [
+              { name: 'Log', value: String(logId) },
+              { name: 'Último error', value: String(error?.message || error).slice(0, 1000) },
+            ],
+          });
         }
       }
     }
@@ -132,7 +142,7 @@ async function loadLogData(log) {
 async function getLogChannel(client) {
   const cfg = await getGuildConfig();
   if (!cfg?.log_channel_id) {
-    console.warn('[LogWatcher] No hay canal de Logs. Usa /config logs set.');
+    console.warn('[LogWatcher] No hay canal de Logs. Abre /config → Canales → Logs.');
     return null;
   }
   return client.channels.fetch(cfg.log_channel_id).catch(error => {
